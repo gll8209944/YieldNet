@@ -64,8 +64,9 @@ class TestPriorityCalculation:
         peer.dist_to_goal = 10.0
         peer.battery_pct = 50.0
 
-        expected = 3 * 10.0 + (1.0 / 10.0) * 5.0 + (100 - 50.0) * 0.1
-        expected = 30.0 + 0.5 + 5.0 = 35.5
+        # Formula: yield_count * 10 + (1/dist_to_goal) * 5 + (100-battery_pct) * 0.1
+        # = 3*10 + (1/10)*5 + 50*0.1 = 30 + 0.5 + 5 = 35.5
+        expected = 35.5
 
         assert abs(peer.calculate_priority_score() - expected) < 0.01
 

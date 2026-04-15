@@ -47,16 +47,16 @@
 
 | Task | Status | Owner | Notes |
 |------|--------|-------|-------|
-| T3-01a | ⏳ | - | Install Gazebo 11.10.2 on cloud |
-| T3-01b | ⏳ | - | Create corridor world (20m × 3m) |
-| T3-01c | ⏳ | - | Create T-intersection world |
-| T3-01d | ⏳ | - | Create 3-robot spawn config |
+| T3-01a | ✅ | - | Install Gazebo 11.10.2 on cloud |
+| T3-01b | ✅ | - | Create corridor world (20m × 3m) |
+| T3-01c | ✅ | - | Create T-intersection world |
+| T3-01d | ✅ | - | Create 3-robot spawn config |
 
 ### T3-02: 双机测试
 
 | Task | Status | Owner | Notes |
 |------|--------|-------|-------|
-| T3-02a | ⏳ | - | Spawn 2 robots in corridor |
+| T3-02a | 🔄 | - | Spawn 2 robots in corridor |
 | T3-02b | ⏳ | - | Verify: opposing robots → one yields, one passes |
 | T3-02c | ⏳ | - | Verify: T-intersection → correct priority ordering |
 | T3-02d | ⏳ | - | Record behavior logs |
