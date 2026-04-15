@@ -146,24 +146,20 @@ class TestConflictHysteresis:
         conflict_ticks = 10  # Already in conflict
         CONFLICT_HYSTERESIS = 5
 
-        # Simulate 3 clean ticks
-        for _ in range(3):
+        # Simulate 5 clean ticks - should NOT clear yet
+        for i in range(5):
             conflict_ticks = max(0, conflict_ticks - 1)
             is_persistent = conflict_ticks >= CONFLICT_HYSTERESIS
-            assert is_persistent  # Still persistent
+            assert is_persistent, f"Tick {i+1}: should still be persistent (ticks={conflict_ticks})"
 
-        # Simulate 2 more clean ticks
-        for _ in range(2):
-            conflict_ticks = max(0, conflict_ticks - 1)
-            if conflict_ticks < CONFLICT_HYSTERESIS:
-                break
-        else:
-            pytest.fail("Should have cleared before 5 clean ticks")
+        # After 5 clean ticks, still at threshold
+        assert conflict_ticks == 5
 
-        # Now actually cleared
-        conflict_ticks = 0
+        # Simulate 1 more clean tick - NOW it clears
+        conflict_ticks = max(0, conflict_ticks - 1)
+        assert conflict_ticks == 4
         is_persistent = conflict_ticks >= CONFLICT_HYSTERESIS
-        assert not is_persistent
+        assert not is_persistent, "Should clear after 6 clean ticks"
 
 
 if __name__ == "__main__":
