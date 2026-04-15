@@ -1,0 +1,335 @@
+{
+  "project": "FleetGuard · 多机避撞协同系统",
+  "version": "1.0",
+  "baseline": "PRD-v1.0 + SAD-v1.0",
+  "lastUpdated": "2026-04-15",
+  "traceabilityMatrix": [
+    {
+      "frId": "FR-001",
+      "frTitle": "心跳信息交换",
+      "ssId": "SS-COM",
+      "ssTitle": "通信桥接层",
+      "dsId": "DS-001",
+      "dsTitle": "RobotHeartbeat.msg 定义 + /fleet/heartbeat Topic 发布/订阅",
+      "modules": [
+        "fleet_coordinator.py::publish_heartbeat()",
+        "fleet_coordinator.py::on_heartbeat_received()"
+      ],
+      "testCases": [
+        "IT-COM-001: 心跳0.5Hz稳定收发",
+        "UT: heartbeat_msg_serialization",
+        "E2E-001: 7天连续运行"
+      ],
+      "status": "Pass"
+    },
+    {
+      "frId": "FR-002",
+      "frTitle": "位姿信息交换",
+      "ssId": "SS-COM",
+      "ssTitle": "通信桥接层",
+      "dsId": "DS-002",
+      "dsTitle": "RobotPose.msg 定义 + /fleet/pose Topic 发布/订阅",
+      "modules": [
+        "fleet_coordinator.py::publish_pose()",
+        "fleet_coordinator.py::on_pose_received()"
+      ],
+      "testCases": [
+        "IT-COM-002: 位姿10Hz稳定收发，延迟P95≤50ms",
+        "IT-PER-001: 位姿端到端延迟测试",
+        "UT: pose_msg_serialization"
+      ],
+      "status": "Pass"
+    },
+    {
+      "frId": "FR-003",
+      "frTitle": "规划路径交换",
+      "ssId": "SS-COM",
+      "ssTitle": "通信桥接层",
+      "dsId": "DS-003",
+      "dsTitle": "PlannedPath.msg 定义 + /fleet/planned_path Topic 发布/订阅",
+      "modules": [
+        "fleet_coordinator.py::publish_planned_path()",
+        "fleet_coordinator.py::on_planned_path_received()"
+      ],
+      "testCases": [
+        "IT-COM-003: 路径2Hz稳定收发",
+        "UT-PC-*: 路径冲突检测单元测试",
+        "IT-COL-001~004: 各场景集成测试"
+      ],
+      "status": "Pass"
+    },
+    {
+      "frId": "FR-004",
+      "frTitle": "分级响应机制",
+      "ssId": "SS-APP",
+      "ssTitle": "应用层(fleet_coordinator)",
+      "dsId": "DS-004",
+      "dsTitle": "状态机定义 (§5) + 决策主循环 (§6.2)",
+      "modules": [
+        "fleet_coordinator.py::StateMachine",
+        "fleet_coordinator.py::_coordination_tick()",
+        "fleet_coordinator.py::_evaluate_single_peer()"
+      ],
+      "testCases": [
+        "UT-SM-*: 状态机转移测试 (10用例)",
+        "UT-VS-*: 速度缩放测试 (5用例)",
+        "IT-COL-001~009: 避撞场景集成测试"
+      ],
+      "status": "Pass"
+    },
+    {
+      "frId": "FR-005",
+      "frTitle": "让行协商机制",
+      "ssId": "SS-APP",
+      "ssTitle": "应用层(fleet_coordinator)",
+      "dsId": "DS-005",
+      "dsTitle": "YieldCommand.msg + 双机协商时序 (§6.5) + 三机排队 (§6.6)",
+      "modules": [
+        "fleet_coordinator.py::request_yield()",
+        "fleet_coordinator.py::acknowledge_yield()",
+        "fleet_coordinator.py::send_resume()",
+        "fleet_coordinator.py::_calculate_priority()"
+      ],
+      "testCases": [
+        "UT-SM-003~006: YIELDING/PASSING状态转移",
+        "UT-PR-*: 优先级计算测试 (7用例)",
+        "IT-COL-001: 走廊对向行驶",
+        "IT-COL-004: 三方交汇排队"
+      ],
+      "status": "Pass"
+    },
+    {
+      "frId": "FR-006",
+      "frTitle": "紧急停车机制",
+      "ssId": "SS-APP",
+      "ssTitle": "应用层(fleet_coordinator)",
+      "dsId": "DS-006",
+      "dsTitle": "EMERGENCY状态 (§5.1) + 距离检测 < 0.8m",
+      "modules": [
+        "fleet_coordinator.py::_evaluate_single_peer()",
+        "fleet_coordinator.py::_emergency_stop()"
+      ],
+      "testCases": [
+        "UT-SM-007: 任意状态→EMERGENCY转移",
+        "IT-COL-005: EMERGENCY生效测试",
+        "IT-PER-003: 紧急停车响应≤200ms"
+      ],
+      "status": "Pass"
+    },
+    {
+      "frId": "FR-007",
+      "frTitle": "通信隔离",
+      "ssId": "SS-COM",
+      "ssTitle": "通信桥接层",
+      "dsId": "DS-007",
+      "dsTitle": "双DDS Domain隔离 (§2.1) + domain_bridge白名单 (§2.3)",
+      "modules": [
+        "/etc/cyclonedds/internal.xml",
+        "/etc/cyclonedds/bridge.xml",
+        "/etc/fleet/domain_bridge.yaml"
+      ],
+      "testCases": [
+        "IT-COM-004: 通信隔离验证 (tcpdump wlan0)",
+        "IT-COM-006: domain_bridge桥接验证"
+      ],
+      "status": "Pass"
+    },
+    {
+      "frId": "FR-008",
+      "frTitle": "楼层隔离",
+      "ssId": "SS-COM",
+      "ssTitle": "通信桥接层",
+      "dsId": "DS-008",
+      "dsTitle": "不同楼层使用不同Domain ID (§2.1) — 1F: Dom42, 2F: Dom43, ...",
+      "modules": [
+        "/etc/cyclonedds/bridge.xml (per-floor domain)"
+      ],
+      "testCases": [
+        "IT-COM-005: 楼层隔离验证 — `ROS_DOMAIN_ID=43 ros2 topic list` 无fleet topic"
+      ],
+      "status": "Pass",
+      "verificationMethod": "ROS_DOMAIN_ID=43 ros2 topic list | grep '/fleet/' 应为空"
+    },
+    {
+      "frId": "FR-009",
+      "frTitle": "三机扩展",
+      "ssId": "SS-APP",
+      "ssTitle": "应用层(fleet_coordinator)",
+      "dsId": "DS-009",
+      "dsTitle": "per-peer状态架构 (§8) + 三机排队决策 (§6.6)",
+      "modules": [
+        "fleet_coordinator.py::peers (Dict)",
+        "fleet_coordinator.py::PeerState",
+        "fleet_coordinator.py::_coordination_tick()"
+      ],
+      "testCases": [
+        "IT-COL-004: 三方交汇排队",
+        "IT-COL-009: 新机器人加入",
+        "E2E-003: 3台真实环境运行"
+      ],
+      "status": "Pass"
+    },
+    {
+      "frId": "FR-010",
+      "frTitle": "动态优先级",
+      "ssId": "SS-APP",
+      "ssTitle": "应用层(fleet_coordinator)",
+      "dsId": "DS-010",
+      "dsTitle": "优先级评分公式 (§6.4): yield_count×10 + (1/dist_to_goal)×5 + (100-battery)×0.1",
+      "modules": [
+        "fleet_coordinator.py::_calculate_priority()"
+      ],
+      "testCases": [
+        "UT-PR-001~007: 优先级计算全面测试",
+        "IT-COL-004: 三机排队无饿死验证"
+      ],
+      "status": "Pass",
+      "starvationTest": "1h内每台机器人yield_count增量≥1，或优先级排序循环周期≤3次/h"
+    },
+    {
+      "frId": "FR-011",
+      "frTitle": "让行超时保护",
+      "ssId": "SS-APP",
+      "ssTitle": "应用层(fleet_coordinator)",
+      "dsId": "DS-011",
+      "dsTitle": "YIELD_TIMEOUT=15s 超时强制恢复 (§6.7)",
+      "modules": [
+        "fleet_coordinator.py::_check_yield_timeout()"
+      ],
+      "testCases": [
+        "UT-TO-001: 让行超时15s恢复",
+        "UT-TO-003: 超时后yield_count递增",
+        "IT-COL-008: 让行超时恢复"
+      ],
+      "status": "Pass"
+    },
+    {
+      "frId": "FR-012",
+      "frTitle": "通信丢失降级",
+      "ssId": "SS-COM",
+      "ssTitle": "通信桥接层",
+      "dsId": "DS-012",
+      "dsTitle": "HEARTBEAT_TIMEOUT=6s 心跳超时降级 (§6.7)",
+      "modules": [
+        "fleet_coordinator.py::_is_peer_timeout()",
+        "fleet_coordinator.py::on_peer_timeout()"
+      ],
+      "testCases": [
+        "UT-TO-002: 心跳超时6s降级",
+        "IT-COL-006: WiFi断连降级",
+        "IT-COL-007: domain_bridge崩溃恢复"
+      ],
+      "status": "Pass"
+    }
+  ],
+  "nfrTraceability": [
+    {
+      "nfrId": "NFR-01",
+      "title": "安全性 — 零碰撞",
+      "target": "连续7天×8h无碰撞",
+      "frIds": ["FR-004", "FR-006"],
+      "dsIds": ["DS-004", "DS-006"],
+      "testCases": ["E2E-001: 7天连续运行"],
+      "status": "Pass"
+    },
+    {
+      "nfrId": "NFR-02",
+      "title": "效率 — 让行延迟",
+      "target": "≤15s",
+      "frIds": ["FR-011"],
+      "dsIds": ["DS-011"],
+      "testCases": ["IT-PER-002: 让行指令送达率"],
+      "status": "Pass"
+    },
+    {
+      "nfrId": "NFR-03",
+      "title": "Nav2集成",
+      "target": "不触发ProgressChecker超时",
+      "frIds": ["FR-004"],
+      "dsIds": ["DS-004"],
+      "testCases": ["IT-COL-001~004: 各类场景Nav2行为树状态"],
+      "status": "Pass"
+    },
+    {
+      "nfrId": "NFR-04",
+      "title": "可扩展性",
+      "target": "3台场景全功能验证",
+      "frIds": ["FR-009"],
+      "dsIds": ["DS-009"],
+      "testCases": ["IT-COL-004", "E2E-003"],
+      "status": "Pass"
+    },
+    {
+      "nfrId": "NFR-05",
+      "title": "低带宽",
+      "target": "≤10KB/s (3台)",
+      "frIds": ["FR-001", "FR-002", "FR-003"],
+      "dsIds": ["DS-001", "DS-002", "DS-003"],
+      "testCases": ["IT-PER-004: 无线带宽占用"],
+      "status": "Pass"
+    },
+    {
+      "nfrId": "NFR-06",
+      "title": "位姿延迟",
+      "target": "≤50ms (P95)",
+      "frIds": ["FR-002"],
+      "dsIds": ["DS-002"],
+      "testCases": ["IT-PER-001: 位姿端到端延迟"],
+      "status": "Pass"
+    }
+  ],
+  "interfaceRegistry": [
+    {
+      "irId": "IR-01",
+      "name": "Fleet Topic Interface",
+      "subsystemA": "Robot A fleet_coordinator",
+      "subsystemB": "Robot B fleet_coordinator",
+      "topics": [
+        {"name": "/fleet/heartbeat", "type": "fleet_msgs/RobotHeartbeat", "freq": "0.5Hz", "qos": "BestEffort, KeepLast(1)", "dir": "bidirectional"},
+        {"name": "/fleet/pose", "type": "fleet_msgs/RobotPose", "freq": "10Hz", "qos": "BestEffort, KeepLast(1)", "dir": "bidirectional"},
+        {"name": "/fleet/planned_path", "type": "fleet_msgs/PlannedPath", "freq": "2Hz", "qos": "BestEffort, KeepLast(1)", "dir": "bidirectional"},
+        {"name": "/fleet/yield", "type": "fleet_msgs/YieldCommand", "freq": "event", "qos": "Reliable, KeepLast(5)", "dir": "bidirectional"}
+      ],
+      "latencyReq": "pose端到端P95≤50ms",
+      "status": "Defined"
+    },
+    {
+      "irId": "IR-02",
+      "name": "Nav2 BT Integration Interface",
+      "subsystemA": "fleet_coordinator",
+      "subsystemB": "Nav2 Behavior Tree",
+      "blackboardKeys": [
+        {"key": "fleet_state", "type": "FleetState (dataclass)", "producer": "CheckFleetConflict", "consumers": ["WaitForYieldClear", "AdjustSpeedForFleet"]}
+      ],
+      "topics": [
+        {"name": "/cmd_vel_nav", "type": "geometry_msgs/Twist", "dir": "FC ← Nav2"},
+        {"name": "/cmd_vel", "type": "geometry_msgs/Twist", "dir": "FC → Chassis"}
+      ],
+      "status": "Defined"
+    },
+    {
+      "irId": "IR-03",
+      "name": "Diagnostics Interface",
+      "subsystemA": "fleet_coordinator",
+      "subsystemB": "Monitoring/Logging",
+      "topics": [
+        {"name": "/fleet/coordinator_status", "type": "fleet_msgs/CoordinatorStatus", "freq": "1Hz", "qos": "BestEffort", "dir": "output-only"}
+      ],
+      "status": "Defined"
+    }
+  ],
+  "adrLog": [
+    {"adrId": "ADR-01", "title": "DDS实现选型", "decision": "CycloneDDS", "alternatives": ["FastDDS"], "status": "Approved"},
+    {"adrId": "ADR-02", "title": "跨域桥接选型", "decision": "ROS2 domain_bridge", "alternatives": ["Zenoh Bridge", "自写FIN节点", "iptables"], "status": "Approved"},
+    {"adrId": "ADR-03", "title": "网络隔离方式", "decision": "双DDS Domain", "alternatives": ["iptables过滤"], "status": "Approved"},
+    {"adrId": "ADR-04", "title": "避撞策略", "decision": "优先级让行+路径冲突检测", "alternatives": ["ORCA算法"], "status": "Approved"},
+    {"adrId": "ADR-05", "title": "Nav2集成方式", "decision": "自定义BT节点", "alternatives": ["cmd_vel拦截"], "status": "Approved"}
+  ],
+  "versionLock": {
+    "CycloneDDS": "0.9.1",
+    "ROS2": "Humble",
+    "Nav2": "Humble v2.0.0+",
+    "Python": "3.8+",
+    "fleet_msgs": "1.0.0"
+  }
+}
