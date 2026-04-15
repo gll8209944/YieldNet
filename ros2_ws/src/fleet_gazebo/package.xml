@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>fleet_gazebo</name>
+  <version>0.1.0</version>
+  <description>Fleet Collision Avoidance Gazebo Simulation</description>
+  <maintainer email="guolinlin@hotmail.com">guolinlin</maintainer>
+  <license>Apache-2.0</license>
+  <build_type>ament_python</build_type>
+
+  <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>gazebo_ros_pkgs</exec_depend>
+  <exec_depend>turtlebot3_gazebo</exec_depend>
+</package>
