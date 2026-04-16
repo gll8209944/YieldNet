@@ -14,9 +14,10 @@ Key features:
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, BestEffortPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 import math
 import time
+from nav_msgs.msg import Odometry
 from fleet_msgs.msg import RobotHeartbeat, RobotPose, PlannedPath, YieldCommand
 from fleet_coordination.peer_state import PeerState, CoordinationState
 
@@ -60,6 +61,7 @@ class FleetCoordinator(Node):
         self._init_state()
         self._init_publishers()
         self._init_subscriptions()
+        self._init_local_subscriptions()
         self._init_timers()
 
         self.get_logger().info(
@@ -134,7 +136,7 @@ class FleetCoordinator(Node):
     def _init_publishers(self):
         """Initialize fleet topic publishers."""
         # BestEffort for frequent data (pose, heartbeat, path)
-        qos_be = QoSProfile(depth=10, reliability=BestEffortPolicy.BEST_EFFORT)
+        qos_be = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.heartbeat_pub = self.create_publisher(RobotHeartbeat, "/fleet/heartbeat", qos_be)
         self.pose_pub = self.create_publisher(RobotPose, "/fleet/pose", qos_be)
         self.path_pub = self.create_publisher(PlannedPath, "/fleet/planned_path", qos_be)
@@ -149,22 +151,51 @@ class FleetCoordinator(Node):
 
         # Cmd_vel output (speed scaling factor)
         # Note: In full integration, this would interface with Nav2 or chassis
+        # Use RELIABLE QoS to ensure speed commands are received
+        # Use relative path so namespace is applied
+        qos_speed = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
         self.cmd_vel_pub = self.create_publisher(
-            RobotPose, "/fleet/coordinator_speed", QoSProfile(depth=1)
+            RobotPose, "fleet/coordinator_speed", qos_speed
         )
 
     def _init_subscriptions(self):
         """Initialize fleet topic subscriptions."""
-        # Fleet topics from other robots
+        # Fleet topics from other robots - use BEST_EFFORT to match publishers
         qos_sub = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1
+            depth=10
         )
         self.create_subscription(RobotHeartbeat, "/fleet/heartbeat", self._heartbeat_callback, qos_sub)
         self.create_subscription(RobotPose, "/fleet/pose", self._pose_callback, qos_sub)
         self.create_subscription(PlannedPath, "/fleet/planned_path", self._path_callback, qos_sub)
         self.create_subscription(YieldCommand, "/fleet/yield", self._yield_callback, qos_sub)
+
+    def _init_local_subscriptions(self):
+        """Initialize subscriptions to local robot sensors via robot namespace."""
+        # Subscribe to local odometry to get actual position
+        # This is used instead of static own_x/own_y parameters
+        from nav_msgs.msg import Odometry
+        qos_odom = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+        self.create_subscription(
+            Odometry,
+            f"/{self.robot_id}/odom",
+            self._odom_callback,
+            qos_odom
+        )
+
+    def _odom_callback(self, msg):
+        """Handle incoming odometry data to update own position."""
+        self.own_x = msg.pose.pose.position.x
+        self.own_y = msg.pose.pose.position.y
+        # Extract yaw from quaternion
+        q = msg.pose.pose.orientation
+        self.own_theta = math.atan2(2.0*(q.w*q.z + q.x*q.y), 1.0 - 2.0*(q.y*q.y + q.z*q.z))
+        self.own_linear_vel = msg.twist.twist.linear.x
 
     def _init_timers(self):
         """Initialize timers for coordination loop and publishing."""
@@ -307,6 +338,11 @@ class FleetCoordinator(Node):
         4. Handle yield timeouts
         """
         current_time = time.time()
+
+        # Debug: log own position every 5 seconds
+        if not hasattr(self, '_last_debug_time') or (current_time - self._last_debug_time) > 5.0:
+            self._last_debug_time = current_time
+            self.get_logger().info(f"TICK: own_pos=({self.own_x:.2f}, {self.own_y:.2f}), peers={len(self.peers)}")
 
         # Step 1: Remove timed-out peers
         self._remove_timed_out_peers(current_time)
