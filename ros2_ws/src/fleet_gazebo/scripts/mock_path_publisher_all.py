@@ -35,6 +35,9 @@ class MockPathPublisher(Node):
         # Store latest odometry for each robot
         self.odom_data: dict[str, dict] = {}
 
+        # Store path publishers for each robot
+        self.path_pubs: dict[str, any] = {}
+
         # QoS for path publishing - BEST_EFFORT to match fleet coordinator
         qos_be = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -51,10 +54,9 @@ class MockPathPublisher(Node):
                 qos_be
             )
 
-            # Publisher for this robot's path (published on fleet topic)
-            # Path is published under /fleet/planned_path (not namespaced)
-            # because the fleet coordinator expects it there
-            self.create_publisher(
+            # Publisher for this robot's path - publish to shared fleet topic
+            # All robots publish to the same /fleet/planned_path topic
+            self.path_pubs[robot_id] = self.create_publisher(
                 PlannedPath,
                 '/fleet/planned_path',
                 qos_be
@@ -129,7 +131,8 @@ class MockPathPublisher(Node):
                 point.z = 0.0
                 path_msg.waypoints.append(point)
 
-            # Publish to the fleet topic
+            # Publish to the robot's namespaced fleet topic
+            self.path_pubs[robot_id].publish(path_msg)
             self.get_logger().info(
                 f'Publishing path for {robot_id}: '
                 f'origin=({odom["x"]:.2f}, {odom["y"]:.2f}), '
