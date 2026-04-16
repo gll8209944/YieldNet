@@ -129,7 +129,7 @@
 | Task | Status | Owner | Notes |
 |------|--------|-------|-------|
 | T4-02a | ⏳ | - | Average yield delay ≤ 15s |
-| T4-02b | ⏳ | - | Bandwidth ≤ 10 KB/s sustained |
+| T4-02b | ✅ Done | - | **VERIFIED**: 3-robot bandwidth = ~2.87 KB/s (well under 10 KB/s target). Details: pose ~191 B/s, heartbeat ~123 B/s, planned_path ~2.63 KB/s |
 
 ---
 
@@ -152,6 +152,7 @@
 - ✅ 移动导航集成测试完成
 - ✅ EMERGENCY状态在距离<0.8m时正确触发
 - ✅ **已修复**: robot_mover现在正确接收coordinator_speed并控制机器人速度
+- ✅ **性能验证通过**: 3机总带宽 ~2.87 KB/s (目标≤10 KB/s) ✓
 
 **已验证的协调逻辑** (2026-04-16):
 - 状态机: NORMAL→AWARENESS→CAUTION→EMERGENCY ✓
