@@ -52,6 +52,7 @@ ament_target_dependencies(adjust_speed_for_fleet
   geometry_msgs
   std_msgs
   behaviortree_cpp_v3
+  nav2_msgs
 )
 
 # Build standalone BT runner executable

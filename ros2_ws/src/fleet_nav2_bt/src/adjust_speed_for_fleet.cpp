@@ -8,6 +8,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "nav2_msgs/msg/speed_limit.hpp"
 #include "behaviortree_cpp_v3/behavior_tree.h"
 
 namespace fleet_nav2_bt
@@ -110,8 +111,15 @@ AdjustSpeedForFleet::AdjustSpeedForFleet(
 : BT::DecoratorNode(name, conf),
   node_(rclcpp::Node::make_shared("adjust_speed_for_fleet")),
   default_speed_(0.5),
-  current_speed_ratio_(1.0)
+  current_speed_ratio_(1.0),
+  last_published_speed_ratio_(1.0)
 {
+  // Publisher for Nav2 SpeedLimit topic
+  // This is the production path for fleet speed control per S1-B
+  speed_limit_pub_ = node_->create_publisher<nav2_msgs::msg::SpeedLimit>(
+    "speed_limit",
+    rclcpp::QoS(rclcpp::KeepLast(1)).reliable());
+
   // Subscription for fleet state
   // Note: /fleet/coordinator_status is diagnostic-only per SAD §13.2
   // This node uses it for BT state awareness only
@@ -170,23 +178,20 @@ BT::NodeStatus AdjustSpeedForFleet::tick()
   // Get speed scaling from fleet state (already computed in subscription callback)
   double speed_ratio = current_speed_ratio_;
 
+  // Publish speed limit to Nav2 controller
+  // Only publish when speed_ratio changes to reduce traffic
+  if (std::abs(speed_ratio - last_published_speed_ratio_) > 0.01) {
+    nav2_msgs::msg::SpeedLimit msg;
+    msg.percentage = true;  // Use percentage (0-100)
+    msg.speed_limit = speed_ratio * 100.0;  // Convert ratio to percentage
+    speed_limit_pub_->publish(msg);
+    last_published_speed_ratio_ = speed_ratio;
+    RCLCPP_INFO(node_->get_logger(), "AdjustSpeedForFleet: published speed_limit=%.1f%% (ratio=%.2f)",
+      msg.speed_limit, speed_ratio);
+  }
+
   // Tick the child node
   BT::NodeStatus child_status = child_node_->executeTick();
-
-  // Apply speed scaling - only affect if we need to stop
-  // Note: This is a simplified implementation. Full Nav2 SpeedLimit integration
-  // is tracked as S1-B work item.
-  if (speed_ratio < 0.01 && child_status == BT::NodeStatus::RUNNING) {
-    // Stop the robot - publish zero velocity
-    geometry_msgs::msg::Twist cmd;
-    cmd.linear.x = 0.0;
-    cmd.angular.z = 0.0;
-    RCLCPP_INFO(node_->get_logger(), "AdjustSpeedForFleet: emergency stop (speed_ratio=%.2f)",
-      speed_ratio);
-    // Note: In a full implementation, we'd intercept the child's cmd_vel output
-    // or use Nav2's SpeedLimit controller plugin. Current approach publishes
-    // directly to cmd_vel which is NOT the production path.
-  }
 
   RCLCPP_INFO(node_->get_logger(), "AdjustSpeedForFleet: state=%s, speed_ratio=%.2f, child_status=%d",
     current_fleet_state_.c_str(), speed_ratio, static_cast<int>(child_status));
