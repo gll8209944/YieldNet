@@ -74,6 +74,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr state_sub_;
   std::string current_fleet_state_;
   double default_speed_;
+  double current_speed_ratio_;
 };
 
 }  // namespace fleet_nav2_bt
