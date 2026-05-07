@@ -1,0 +1,21 @@
+[Unit]
+Description=Fleet Coordination Domain Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment="CYCLONEDDS_URI=file:///etc/cyclonedds/bridge.xml"
+Environment="ROS_DOMAIN_ID=0"
+ExecStart=/opt/ros/humble/bin/ros2 run domain_bridge domain_bridge --ros-args --params-file /etc/fleet/domain_bridge.yaml
+Restart=always
+RestartSec=5
+
+# Safety limits
+LimitNOFILE=65536
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

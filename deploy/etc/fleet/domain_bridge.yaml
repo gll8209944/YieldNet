@@ -1,0 +1,60 @@
+# Domain Bridge Configuration for Fleet Coordination
+# Per SAD §2.3: Bridge whitelist for /fleet/* topics
+#
+# This file configures ros2 domain_bridge to bridge topics between
+# Domain 0 (wired eth0) and Domain 42 (wireless wlan0)
+#
+# Usage:
+#   ros2 run domain_bridge domain_bridge --ros-args --params-file /etc/fleet/domain_bridge.yaml
+
+/**:
+  ros__parameters:
+    # Bridge configurations
+    bridges:
+      # Fleet heartbeat - 0.5 Hz, small message
+      - publisher_topic: "/fleet/heartbeat"
+        subscriber_topic: "/fleet/heartbeat"
+        publisher_qos:
+          reliability: best_effort
+          durability: volatile
+          depth: 1
+        subscriber_qos:
+          reliability: best_effort
+          durability: volatile
+          depth: 1
+
+      # Fleet pose - 10 Hz, position data
+      - publisher_topic: "/fleet/pose"
+        subscriber_topic: "/fleet/pose"
+        publisher_qos:
+          reliability: best_effort
+          durability: volatile
+          depth: 1
+        subscriber_qos:
+          reliability: best_effort
+          durability: volatile
+          depth: 1
+
+      # Fleet planned path - 2 Hz, path data
+      - publisher_topic: "/fleet/planned_path"
+        subscriber_topic: "/fleet/planned_path"
+        publisher_qos:
+          reliability: best_effort
+          durability: volatile
+          depth: 1
+        subscriber_qos:
+          reliability: best_effort
+          durability: volatile
+          depth: 1
+
+      # Fleet yield command - event-driven, reliable delivery required
+      - publisher_topic: "/fleet/yield"
+        subscriber_topic: "/fleet/yield"
+        publisher_qos:
+          reliability: reliable
+          durability: volatile
+          depth: 5
+        subscriber_qos:
+          reliability: reliable
+          durability: volatile
+          depth: 5

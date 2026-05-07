@@ -1,0 +1,32 @@
+<library path="check_fleet_conflict">
+  <class name="fleet_nav2_bt/CheckFleetConflict"
+         type="fleet_nav2_bt::CheckFleetConflict"
+         base_class_type="nav2_behavior_tree::BtConditionNode">
+    <description>
+      Check if robot has fleet coordination conflict with peers.
+      Outputs fleet_state to blackboard.
+    </description>
+  </class>
+</library>
+
+<library path="wait_for_yield_clear">
+  <class name="fleet_nav2_bt/WaitForYieldClear"
+         type="fleet_nav2_bt::WaitForYieldClear"
+         base_class_type="nav2_behavior_tree::BtActionNode">
+    <description>
+      Wait for yield clear during fleet coordination.
+      Publishes zero velocity and ACK_YIELD until RESUME received or timeout.
+    </description>
+  </class>
+</library>
+
+<library path="adjust_speed_for_fleet">
+  <class name="fleet_nav2_bt/AdjustSpeedForFleet"
+         type="fleet_nav2_bt::AdjustSpeedForFleet"
+         base_class_type="nav2_behavior_tree::BtDecoratorNode">
+    <description>
+      Adjust speed for fleet coordination.
+      Modulates child node speed based on fleet state.
+    </description>
+  </class>
+</library>

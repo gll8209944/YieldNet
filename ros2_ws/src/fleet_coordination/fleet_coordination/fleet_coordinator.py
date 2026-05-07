@@ -162,6 +162,14 @@ class FleetCoordinator(Node):
             RobotPose, "fleet/coordinator_speed", qos_speed
         )
 
+        # Diagnostic topic for local monitoring at 1Hz
+        # Per SAD §13.2: This does NOT go through domain_bridge
+        from std_msgs.msg import String
+        qos_diag = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
+        self.diagnostic_pub = self.create_publisher(
+            String, "fleet/coordinator_status", qos_diag
+        )
+
     def _init_subscriptions(self):
         """Initialize fleet topic subscriptions."""
         # Fleet topics from other robots - use BEST_EFFORT to match publishers
@@ -198,12 +206,27 @@ class FleetCoordinator(Node):
         self.own_linear_vel = msg.twist.twist.linear.x
 
     def _init_timers(self):
-        """Initialize timers for coordination loop and publishing."""
+        """Initialize timers for coordination loop and publishing.
+
+        Per spec §2.3:
+        - heartbeat: 0.5 Hz (every 2s)
+        - pose: 10 Hz (every 0.1s)
+        - planned_path: 2 Hz (every 0.5s)
+        """
         # Main coordination tick at 10 Hz (100ms)
         self.coordination_timer = self.create_timer(0.1, self._coordination_tick)
 
-        # Publish own state at lower frequency to reduce bandwidth
-        self.publish_timer = self.create_timer(1.0, self._publish_own_state)
+        # Heartbeat at 0.5 Hz (every 2 seconds)
+        self.heartbeat_timer = self.create_timer(2.0, self._publish_heartbeat)
+
+        # Pose at 10 Hz (every 0.1 seconds)
+        self.pose_timer = self.create_timer(0.1, self._publish_pose)
+
+        # Planned path at 2 Hz (every 0.5 seconds)
+        self.path_timer = self.create_timer(0.5, self._publish_planned_path)
+
+        # Diagnostic status at 1Hz
+        self.diagnostic_timer = self.create_timer(1.0, self._publish_diagnostic)
 
     def _heartbeat_callback(self, msg: RobotHeartbeat):
         """Handle incoming heartbeat from peer.
@@ -288,11 +311,13 @@ class FleetCoordinator(Node):
             self.get_logger().warn(f"EMERGENCY_STOP from {peer_id}")
             self.current_state = CoordinationState.EMERGENCY
 
-    def _publish_own_state(self):
-        """Publish own robot state to fleet topics."""
+    def _publish_heartbeat(self):
+        """Publish heartbeat at 0.5 Hz (every 2 seconds).
+
+        Per spec §4.1 FR-001: heartbeat contains robot_id, status, battery_pct, yield_count, dist_to_goal.
+        """
         current_time = self.get_clock().now().to_msg()
 
-        # Publish heartbeat
         heartbeat = RobotHeartbeat()
         heartbeat.robot_id = self.robot_id
         heartbeat.status = 1  # moving
@@ -302,7 +327,13 @@ class FleetCoordinator(Node):
         heartbeat.stamp = current_time
         self.heartbeat_pub.publish(heartbeat)
 
-        # Publish pose
+    def _publish_pose(self):
+        """Publish pose at 10 Hz (every 0.1 seconds).
+
+        Per spec §4.1 FR-002: pose contains x, y, theta, linear_vel, angular_vel.
+        """
+        current_time = self.get_clock().now().to_msg()
+
         pose = RobotPose()
         pose.robot_id = self.robot_id
         pose.x = self.own_x
@@ -313,20 +344,63 @@ class FleetCoordinator(Node):
         pose.stamp = current_time
         self.pose_pub.publish(pose)
 
-        # Publish planned path
-        if self.own_planned_path:
-            path_msg = PlannedPath()
-            path_msg.robot_id = self.robot_id
-            from geometry_msgs.msg import Point
-            for x, y in self.own_planned_path:
-                p = Point()
-                p.x = x
-                p.y = y
-                p.z = 0.0
-                path_msg.waypoints.append(p)
-            path_msg.estimated_speed = self.own_linear_vel
-            path_msg.stamp = current_time
-            self.path_pub.publish(path_msg)
+    def _publish_planned_path(self):
+        """Publish planned path at 2 Hz (every 0.5 seconds).
+
+        Per spec §4.1 FR-003: path contains waypoints ahead 5m.
+        """
+        if not self.own_planned_path:
+            return
+
+        current_time = self.get_clock().now().to_msg()
+        path_msg = PlannedPath()
+        path_msg.robot_id = self.robot_id
+        from geometry_msgs.msg import Point
+        for x, y in self.own_planned_path:
+            p = Point()
+            p.x = x
+            p.y = y
+            p.z = 0.0
+            path_msg.waypoints.append(p)
+        path_msg.estimated_speed = self.own_linear_vel
+        path_msg.stamp = current_time
+        self.path_pub.publish(path_msg)
+
+    def _publish_diagnostic(self):
+        """Publish diagnostic status to /fleet/coordinator_status.
+
+        Per SAD §13.2: Diagnostic topic at 1Hz containing:
+        - robot_id
+        - current state
+        - speed_ratio
+        - peer list with distances and states
+        """
+        import json
+        from std_msgs.msg import String
+
+        diag = {
+            'robot_id': self.robot_id,
+            'state': self.current_state.name,
+            'speed_ratio': self.get_speed_scaling(),
+            'peers': []
+        }
+
+        for peer_id, peer in self.peers.items():
+            dist = math.sqrt((peer.x - self.own_x)**2 + (peer.y - self.own_y)**2)
+            diag['peers'].append({
+                'robot_id': peer_id,
+                'distance': round(dist, 2),
+                'state': peer.coordination_state.name if hasattr(peer.coordination_state, 'name') else str(peer.coordination_state),
+                'priority_score': peer.calculate_priority_score()
+            })
+
+        msg = String()
+        msg.data = json.dumps(diag)
+        self.diagnostic_pub.publish(msg)
+
+    def get_speed_scaling(self) -> float:
+        """Get current speed scaling factor based on coordination state."""
+        return SPEED_SCALING.get(self.current_state, 1.0)
 
     def _coordination_tick(self):
         """Main coordination decision loop at 10 Hz.

@@ -1,0 +1,30 @@
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <PipelineSequence>
+      <!-- Compute path to goal -->
+      <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+
+      <!-- Fleet coordination wrapper -->
+      <ReactiveSequence name="FleetCoordinatedFollow">
+        <!-- Check for fleet conflicts -->
+        <ReactiveFallback name="FleetYieldCheck">
+          <!-- Inverter: if NO conflict, skip yield wait -->
+          <Inverter>
+            <CheckFleetConflict robot_id="{robot_id}"/>
+          </Inverter>
+
+          <!-- If conflict detected and we should yield -->
+          <Sequence name="YieldSequence">
+            <WaitForYieldClear robot_id="{robot_id}" peer_id="{conflict_peer}" timeout="15.0"/>
+          </Sequence>
+        </ReactiveFallback>
+
+        <!-- Adjust speed based on fleet state -->
+        <AdjustSpeedForFleet default_speed="0.5">
+          <!-- Follow the computed path with speed adjustment -->
+          <FollowPath path="{path}" controller_id="FollowPat"/>
+        </AdjustSpeedForFleet>
+      </ReactiveSequence>
+    </PipelineSequence>
+  </BehaviorTree>
+</root>

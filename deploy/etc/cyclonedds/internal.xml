@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS configuration for internal robot communication (Domain 0)
+  Per SAD §3.1: Internal domain uses wired eth0 only
+
+  This configuration is used by all nodes except domain_bridge.
+  Set CYCLONEDDS_URI=file:///etc/cyclonedds/internal.xml to use.
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="0">
+    <General>
+      <Interfaces>
+        <!-- Wired ethernet only - internal communication -->
+        <NetworkInterface name="eth0" priority="default" multicast="true" />
+      </Interfaces>
+      <AllowMulticast>true</AllowMulticast>
+    </General>
+    <Internal>
+      <!-- Receive buffer size for high throughput -->
+      <SocketReceiveBufferSize min="4MB" />
+      <!-- Write history configuration for reliability -->
+      <Watermarks>
+        <WhcHigh>500kB</WhcHigh>
+      </Watermarks>
+    </Internal>
+    <Discovery>
+      <!-- Standard discovery configuration -->
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>100</MaxAutoParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

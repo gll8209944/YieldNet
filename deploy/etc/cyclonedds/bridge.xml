@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS configuration for domain_bridge process
+  Per SAD §3.2: Bridge process participates in both Domain 0 and Domain 42
+
+  This configuration enables the bridge to communicate on both
+  wired (eth0) and wireless (wlan0) interfaces.
+
+  Set CYCLONEDDS_URI=file:///etc/cyclonedds/bridge.xml to use.
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <!-- Domain 0: Wired internal communication -->
+  <Domain id="0">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="eth0" priority="default" multicast="true" />
+      </Interfaces>
+      <AllowMulticast>true</AllowMulticast>
+    </General>
+  </Domain>
+
+  <!-- Domain 42: Fleet wireless communication -->
+  <Domain id="42">
+    <General>
+      <Interfaces>
+        <!-- Wireless interface - unicast only for reliability -->
+        <NetworkInterface name="wlan0" priority="default" multicast="false" />
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+      <!-- Limit max message size for WiFi MTU -->
+      <MaxMessageSize>1452B</MaxMessageSize>
+    </General>
+    <Discovery>
+      <!-- Explicit peer list for deterministic discovery -->
+      <Peers>
+        <!-- Replace with actual robot IPs -->
+        <Peer Address="192.168.50.102" />
+        <Peer Address="192.168.50.103" />
+      </Peers>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>10</MaxAutoParticipantIndex>
+    </Discovery>
+    <Internal>
+      <!-- Smaller buffer for wireless -->
+      <SocketReceiveBufferSize min="1MB" />
+    </Internal>
+  </Domain>
+</CycloneDDS>
