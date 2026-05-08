@@ -250,7 +250,25 @@ for robot in "${ROBOTS[@]}"; do
         timeout ${DURATION}s ros2 topic echo /$robot/fleet/coordinator_status 2>&1 | tee $LOG_DIR/status_${robot}.log || true
         exec bash
     " &
+
+    # Collect speed_limit if available (requires Nav2 BT running)
+    screen -dmS speed_${robot} bash -c "
+        source /opt/ros/humble/setup.bash
+        source ${ROS2_WS}/install/setup.bash
+        export ROS_DOMAIN_ID=0
+        timeout ${DURATION}s ros2 topic echo /${robot}/speed_limit 2>&1 | tee $LOG_DIR/speed_${robot}.log || true
+        exec bash
+    " &
 done
+
+# Collect /fleet/yield if available
+screen -dmS yield_fleet bash -c "
+    source /opt/ros/humble/setup.bash
+    source ${ROS2_WS}/install/setup.bash
+    export ROS_DOMAIN_ID=0
+    timeout ${DURATION}s ros2 topic echo /fleet/yield 2>&1 | tee $LOG_DIR/yield.log || true
+    exec bash
+" &
 
 echo ""
 echo "=========================================="
@@ -359,6 +377,20 @@ cat >> "$REPORT_FILE" << RPTEOF
 
 ---
 
+## Speed Limit Logs (last 20 lines)
+\`\`\`
+$(tail -20 $LOG_DIR/speed_robot_a.log 2>/dev/null || echo "No speed_limit data (Nav2 BT may not be running)")
+\`\`\`
+
+---
+
+## Fleet Yield Log (last 20 lines)
+\`\`\`
+$(tail -20 $LOG_DIR/yield.log 2>/dev/null || echo "No yield data")
+\`\`\`
+
+---
+
 ## Mock Path Log (last 20 lines)
 \`\`\`
 $(tail -20 $LOG_DIR/mock_path.log 2>/dev/null || echo "No log")
@@ -384,6 +416,20 @@ $(tail -30 $LOG_DIR/gazebo.log 2>/dev/null || echo "No log")
 
 ---
 
+## State Transition Analysis
+
+### robot_a observed states
+\`\`\`
+$(grep -oE "STATE_CHANGE:[^ ]+ [A-Z]+" $LOG_DIR/coord_robot_a.log 2>/dev/null | sort -u || echo "No STATE_CHANGE found")
+\`\`\`
+
+### robot_b observed states
+\`\`\`
+$(grep -oE "STATE_CHANGE:[^ ]+ [A-Z]+" $LOG_DIR/coord_robot_b.log 2>/dev/null | sort -u || echo "No STATE_CHANGE found")
+\`\`\`
+
+---
+
 ## Log Files Location
 
 All logs saved to: $LOG_DIR/
@@ -391,6 +437,8 @@ All logs saved to: $LOG_DIR/
 - \`gazebo.log\` - Gazebo server output
 - \`coord_*.log\` - Fleet coordinator logs
 - \`status_*.log\` - coordinator_status topic echo
+- \`speed_*.log\` - speed_limit topic echo (if Nav2 BT running)
+- \`yield.log\` - /fleet/yield topic echo
 - \`mock_path.log\` - Mock path publisher output
 
 ---
