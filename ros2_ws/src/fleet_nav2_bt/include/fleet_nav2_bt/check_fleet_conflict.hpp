@@ -43,7 +43,8 @@ public:
   static BT::PortsList providedPorts()
   {
     return {
-      BT::InputPort<std::string>("robot_id", "Robot ID")
+      BT::InputPort<std::string>("robot_id", "Robot ID"),
+      BT::OutputPort<std::string>("conflict_peer", "Peer robot ID causing conflict, or 'unknown'")
     };
   }
 
@@ -57,6 +58,8 @@ private:
   rclcpp::Node::SharedPtr node_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr state_sub_;
   std::string current_fleet_state_;
+  std::string current_speed_ratio_;
+  std::string conflict_peer_;
   bool state_received_;
 };
 

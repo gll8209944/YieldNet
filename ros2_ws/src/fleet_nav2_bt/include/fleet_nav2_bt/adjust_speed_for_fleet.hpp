@@ -7,6 +7,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "nav2_msgs/msg/speed_limit.hpp"
 #include "behaviortree_cpp_v3/decorator_node.h"
 
 namespace fleet_nav2_bt
@@ -71,9 +72,12 @@ private:
   double getSpeedScaling(const std::string & state);
 
   rclcpp::Node::SharedPtr node_;
+  rclcpp::Publisher<nav2_msgs::msg::SpeedLimit>::SharedPtr speed_limit_pub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr state_sub_;
   std::string current_fleet_state_;
   double default_speed_;
+  double current_speed_ratio_;
+  double last_published_speed_ratio_;
 };
 
 }  // namespace fleet_nav2_bt
