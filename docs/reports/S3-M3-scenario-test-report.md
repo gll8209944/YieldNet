@@ -228,7 +228,7 @@ fleet_merge_nav2_fleet_params /tmp/nav2_fleet.yaml
 | `ros2_ws/src/fleet_nav2_bt/behavior_trees/navigate_with_fleet.xml` | `FollowPat` → `FollowPath`（对齐 nav2_params 默认 controller id） |
 | `ros2_ws/src/fleet_gazebo/fleet_gazebo/merge_nav2_fleet_params.py` | 合并系统 `nav2_params.yaml` + fleet 插件 + `default_nav_to_pose_bt_xml` |
 | `ros2_ws/src/fleet_gazebo/setup.py` / `package.xml` | `fleet_merge_nav2_fleet_params` 入口与依赖 |
-| `ros2_ws/src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh` | 走廊双机 + 双 Nav2(SLAM) + topic 采集 |
+| `ros2_ws/src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh` | …；`ROS2_WS`=`scripts/../../..`；**URDF**：xacro 可用则用 `turtlebot3_burger.urdf.xacro`，否则降级 `turtlebot3_gazebo/turtlebot3_burger.urdf`；**fleet_gazebo**/turtlebot 路径以 `${ROS2_WS}/install` + humble 为准 |
 | `ros2_ws/src/fleet_gazebo/scripts/move_robots_corridor_two.py` | 仅 `WITH_NAV2=0` 时的 cmd_vel 场景激励（测试 harness） |
 | `ros2_ws/src/fleet_gazebo/scripts/send_nav2_goal.py` | `nav2_simple_commander` 单目标（可选） |
 
@@ -253,6 +253,7 @@ fleet_merge_nav2_fleet_params /tmp/nav2_fleet.yaml
 
 - `WaitForYieldClear` 依赖 blackboard `conflict_peer`；本迭代在 `CheckFleetConflict` 中从 `coordinator_status` 的 `peers[0].robot_id` **粗解析**首个 peer（仅解析/接线，未改协调算法）。
 - **PARTIAL 说明**：全闭环 yield/resume 仍依赖真实路径冲突 + 协调器状态进入 YIELDING/PASSING + BT 进入 yield 分支；脚本仅提供可重复启动链路与日志采集位点。
+- **ECS 烟雾（会话内）**：在修复 `ROS2_WS`/`PKG_SHARE`、`bash -u`+ament、以及在无系统 `xacro` 包时降级为 `turtlebot3_gazebo` 静态 burger URDF 后，远程一次运行可见流程推进至 `[10] topic collectors`；**未**在同一会话内解析完整 `speed_*.log`/`yield.log`，**不**据此声称 yield 闭环已验证。
 
 ### state transition result
 
@@ -278,7 +279,7 @@ fleet_merge_nav2_fleet_params /tmp/nav2_fleet.yaml
 
 1. 双机 SLAM + 双 Nav2 资源占用高，ECS/笔记本可能无法在 90s 内稳定 activate。  
 2. `plugin_lib_names` 依赖工作空间 `AMENT_PREFIX_PATH` 找到 `libfleet_*_bt_node.so`。  
-3. `fleet_merge_nav2_fleet_params` 对上游 `nav2_params.yaml` 做 YAML 读写，上游格式重大变更时需回归。  
+3. isolated/partial overlay 下 `AMENT_PREFIX_PATH` 可能未链入全部本工作区包，`ros2 pkg prefix fleet_gazebo` 不可靠；脚本已改为 `${ROS2_WS}/install/fleet_gazebo/share/fleet_gazebo`。  
 
 ### Next steps
 

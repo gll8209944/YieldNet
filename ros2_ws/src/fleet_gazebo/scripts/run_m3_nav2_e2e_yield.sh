@@ -16,10 +16,14 @@
 # - WITH_NAV2=1 does NOT publish test cmd_vel via move_robots_corridor_two.py (would fight Nav2). Use WITH_GOALS=1.
 # - WITH_NAV2=0 starts the corridor_two mover harness (same class of test stimulus as legacy scripts).
 
-set -euo pipefail
+# Do not use `set -u` before sourcing /opt/ros/humble/setup.bash: Bash 5.1+ treats
+# unset vars as errors even inside `[ -n "$AMENT_TRACE_SETUP_FILES" ]`, which breaks
+# the stock ament prefix setup.
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROS2_WS="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+# Workspace root = .../ros2_ws (contains install/, src/). From this file: scripts -> fleet_gazebo -> src -> ws.
+ROS2_WS="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 DURATION=${1:-90}
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_DIR=/tmp/fleet_test_nav2_e2e_yield_${TIMESTAMP}
@@ -30,7 +34,21 @@ mkdir -p "$LOG_DIR"
 
 source /opt/ros/humble/setup.bash
 export TURTLEBOT3_MODEL=burger
-GAZEBO_MODEL_PATH=$(ros2 pkg prefix turtlebot3_gazebo)/share/turtlebot3_gazebo/models
+# Resolve TurtleBot paths while only Humble is sourced (robust vs. thin workspace overlays).
+TB3GZ_PREFIX=""
+TB3GZ_PREFIX=$(ros2 pkg prefix turtlebot3_gazebo 2>/dev/null) || true
+if [ -z "$TB3GZ_PREFIX" ] || [ ! -d "${TB3GZ_PREFIX}/share/turtlebot3_gazebo/models" ]; then
+  TB3GZ_PREFIX="/opt/ros/humble"
+fi
+export GAZEBO_MODEL_PATH="${TB3GZ_PREFIX}/share/turtlebot3_gazebo/models"
+
+TB3_PREFIX=""
+TB3_PREFIX=$(ros2 pkg prefix turtlebot3_description 2>/dev/null) || true
+if [ -z "$TB3_PREFIX" ] || [ ! -f "${TB3_PREFIX}/share/turtlebot3_description/urdf/turtlebot3_burger.urdf.xacro" ]; then
+  TB3_PREFIX="/opt/ros/humble"
+fi
+TB3_XACRO_URDF="${TB3_PREFIX}/share/turtlebot3_description/urdf/turtlebot3_burger.urdf.xacro"
+TB3_STATIC_URDF="${TB3GZ_PREFIX}/share/turtlebot3_gazebo/urdf/turtlebot3_burger.urdf"
 
 echo "[0] Build check: source workspace"
 if [ -f "${ROS2_WS}/install/setup.bash" ]; then
@@ -41,7 +59,19 @@ else
   exit 1
 fi
 
-PKG_SHARE=$(ros2 pkg prefix fleet_gazebo)/share/fleet_gazebo
+# Isolated/partial overlays may not chain every package prefix; use install tree directly.
+PKG_SHARE="${ROS2_WS}/install/fleet_gazebo/share/fleet_gazebo"
+if [ ! -d "${PKG_SHARE}/scripts" ]; then
+  _fg_prefix=""
+  _fg_prefix=$(ros2 pkg prefix fleet_gazebo 2>/dev/null) || true
+  if [ -n "$_fg_prefix" ]; then
+    PKG_SHARE="${_fg_prefix}/share/fleet_gazebo"
+  fi
+fi
+if [ ! -f "${PKG_SHARE}/scripts/move_robots_corridor_two.py" ]; then
+  echo "ERROR: fleet_gazebo scripts not found under ${PKG_SHARE}"
+  exit 1
+fi
 MOVE_PY="${PKG_SHARE}/scripts/move_robots_corridor_two.py"
 SEND_GOAL_PY="${PKG_SHARE}/scripts/send_nav2_goal.py"
 
@@ -107,8 +137,17 @@ ros2 run gazebo_ros spawn_entity.py -entity robot_b -file /tmp/robot_sdf/robot_b
 sleep 2
 
 echo "[4] robot_state_publisher (burger URDF)"
-TB3_URDF=$(ros2 pkg prefix turtlebot3_description)/share/turtlebot3_description/urdf/turtlebot3_burger.urdf.xacro
-xacro "$TB3_URDF" > "$LOG_DIR/burger.urdf"
+if [ -f "$TB3_XACRO_URDF" ] && command -v xacro >/dev/null 2>&1 && xacro "$TB3_XACRO_URDF" > "$LOG_DIR/burger.urdf"; then
+  true
+elif [ -f "$TB3_XACRO_URDF" ] && ros2 run xacro xacro "$TB3_XACRO_URDF" > "$LOG_DIR/burger.urdf" 2>/dev/null; then
+  true
+elif [ -f "$TB3_STATIC_URDF" ]; then
+  echo "[4] WARN: xacro not available; using turtlebot3_gazebo static turtlebot3_burger.urdf (install ros-humble-xacro for xacro path)"
+  cp -f "$TB3_STATIC_URDF" "$LOG_DIR/burger.urdf"
+else
+  echo "ERROR: need turtlebot3 burger URDF (xacro: ${TB3_XACRO_URDF} or static: ${TB3_STATIC_URDF})"
+  exit 1
+fi
 for ns in robot_a robot_b; do
   screen -dmS rsp_${ns} bash -c "
     source /opt/ros/humble/setup.bash
