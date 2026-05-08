@@ -148,13 +148,15 @@ else
   echo "ERROR: need turtlebot3 burger URDF (xacro: ${TB3_XACRO_URDF} or static: ${TB3_STATIC_URDF})"
   exit 1
 fi
+WRITE_RSP_PY="${PKG_SHARE}/scripts/write_rsp_params.py"
 for ns in robot_a robot_b; do
+  python3 ${WRITE_RSP_PY} ${LOG_DIR} ${ns}
   screen -dmS rsp_${ns} bash -c "
     source /opt/ros/humble/setup.bash
     source ${ROS2_WS}/install/setup.bash
     export ROS_DOMAIN_ID=0
-    ros2 run robot_state_publisher robot_state_publisher --ros-args -r __ns:=/${ns} \
-      -p use_sim_time:=true -p robot_description:=\$(cat ${LOG_DIR}/burger.urdf) \
+    ros2 run robot_state_publisher robot_state_publisher --ros-args \
+      --params-file ${LOG_DIR}/rsp_${ns}.yaml \
       2>&1 | tee $LOG_DIR/rsp_${ns}.log
     exec bash"
   sleep 0.5
@@ -195,7 +197,8 @@ if [ "$WITH_NAV2" = "1" ]; then
     source ${ROS2_WS}/install/setup.bash
     export ROS_DOMAIN_ID=0
     ros2 launch nav2_bringup bringup_launch.py \
-      slam:=True use_sim_time:=True \
+      slam:=False use_sim_time:=True \
+      map:=/opt/ros/humble/share/nav2_bringup/maps/turtlebot3_world.yaml \
       namespace:=robot_a use_namespace:=True \
       params_file:=${LOG_DIR}/nav2_fleet_merged.yaml \
       autostart:=true use_composition:=False \
@@ -207,7 +210,8 @@ if [ "$WITH_NAV2" = "1" ]; then
     source ${ROS2_WS}/install/setup.bash
     export ROS_DOMAIN_ID=0
     ros2 launch nav2_bringup bringup_launch.py \
-      slam:=True use_sim_time:=True \
+      slam:=False use_sim_time:=True \
+      map:=/opt/ros/humble/share/nav2_bringup/maps/turtlebot3_world.yaml \
       namespace:=robot_b use_namespace:=True \
       params_file:=${LOG_DIR}/nav2_fleet_merged.yaml \
       autostart:=true use_composition:=False \

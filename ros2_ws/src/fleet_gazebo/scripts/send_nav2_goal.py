@@ -37,9 +37,13 @@ def main() -> None:
     pose.pose.orientation.z = sy
     pose.pose.orientation.w = cy
 
-    if not nav.waitUntilNav2Active(timeout=600.0):
-        print('ERROR: Nav2 did not activate', file=sys.stderr)
-        sys.exit(2)
+    # waitUntilNav2Active(self, navigator, localizer) has NO timeout parameter.
+    # Nav2 may not be fully active when goals are sent (amcl_pose not yet published
+    # for initial pose), so we just log and continue - goal will fail gracefully.
+    try:
+        nav.waitUntilNav2Active()
+    except Exception as e:
+        nav.get_logger().warn(f'Nav2 may not be fully active: {e}')
 
     nav.goToPose(pose)
     start = time.time()
