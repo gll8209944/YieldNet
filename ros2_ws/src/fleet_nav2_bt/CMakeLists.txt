@@ -48,12 +48,49 @@ add_library(adjust_speed_for_fleet SHARED
   src/adjust_speed_for_fleet.cpp
 )
 ament_target_dependencies(adjust_speed_for_fleet
-    rclcpp
+  rclcpp
   geometry_msgs
   std_msgs
   behaviortree_cpp_v3
   nav2_msgs
 )
+
+# Shared libraries exporting BT_RegisterNodesFromPlugin for Nav2 bt_navigator (duplicate compile; PLUGIN macro).
+function(fleet_add_bt_nav_plugin_lib target cpp_file)
+  add_library(${target} SHARED ${cpp_file})
+  target_compile_definitions(${target} PRIVATE FLEET_NAV2_BT_PLUGIN BT_PLUGIN_EXPORT)
+  target_include_directories(${target} PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
+endfunction()
+
+fleet_add_bt_nav_plugin_lib(fleet_check_fleet_conflict_bt_node src/check_fleet_conflict.cpp)
+ament_target_dependencies(fleet_check_fleet_conflict_bt_node
+  rclcpp
+  geometry_msgs
+  std_msgs
+  behaviortree_cpp_v3
+)
+set_target_properties(fleet_check_fleet_conflict_bt_node PROPERTIES OUTPUT_NAME fleet_check_fleet_conflict_bt_node)
+
+fleet_add_bt_nav_plugin_lib(fleet_wait_for_yield_clear_bt_node src/wait_for_yield_clear.cpp)
+ament_target_dependencies(fleet_wait_for_yield_clear_bt_node
+  rclcpp
+  rclcpp_action
+  geometry_msgs
+  std_msgs
+  behaviortree_cpp_v3
+  fleet_msgs
+)
+set_target_properties(fleet_wait_for_yield_clear_bt_node PROPERTIES OUTPUT_NAME fleet_wait_for_yield_clear_bt_node)
+
+fleet_add_bt_nav_plugin_lib(fleet_adjust_speed_for_fleet_bt_node src/adjust_speed_for_fleet.cpp)
+ament_target_dependencies(fleet_adjust_speed_for_fleet_bt_node
+  rclcpp
+  geometry_msgs
+  std_msgs
+  behaviortree_cpp_v3
+  nav2_msgs
+)
+set_target_properties(fleet_adjust_speed_for_fleet_bt_node PROPERTIES OUTPUT_NAME fleet_adjust_speed_for_fleet_bt_node)
 
 # Build standalone BT runner executable
 add_executable(fleet_bt_runner
@@ -78,6 +115,9 @@ install(TARGETS
   check_fleet_conflict
   wait_for_yield_clear
   adjust_speed_for_fleet
+  fleet_check_fleet_conflict_bt_node
+  fleet_wait_for_yield_clear_bt_node
+  fleet_adjust_speed_for_fleet_bt_node
   fleet_bt_runner
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -104,6 +144,9 @@ ament_export_libraries(
   check_fleet_conflict
   wait_for_yield_clear
   adjust_speed_for_fleet
+  fleet_check_fleet_conflict_bt_node
+  fleet_wait_for_yield_clear_bt_node
+  fleet_adjust_speed_for_fleet_bt_node
 )
 ament_export_dependencies(
     rclcpp

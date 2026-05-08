@@ -1,7 +1,7 @@
 # S3-M3 Scenario Test Report
 
 **日期**: 2026-05-08
-**分支**: master (commit 149a305 + BT fixes)
+**分支**: master（含 Nav2 e2e 脚本与 BT 插件；详见 §Scenario: Nav2 full-stack e2e yield）
 
 ---
 
@@ -184,3 +184,105 @@ last_published_speed_ratio_(0.0)
 - 完整 Nav2 BT integration
 
 **Recommendation**: speed_limit 发布链路已验证。继续添加 Nav2 BT 集成测试和 yield/resume 场景。
+
+---
+
+## Scenario: Nav2 full-stack e2e yield
+
+**目的**: 推进 `bt_navigator` 全栈加载 `navigate_with_fleet.xml`、`AdjustSpeedForFleet` 在 Nav2 tick 中可用，并在 corridor-2robot 上尝试 e2e yield 证据链。
+
+### run command
+
+前置：`colcon build --symlink-install` 且已 `source install/setup.bash`。
+
+```bash
+cd /path/to/YieldNet/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+# 默认 WITH_NAV2=1 WITH_GOALS=1（Nav2 独占 cmd_vel；不要与 cmd_vel mover 同时开）
+chmod +x src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh   # dev tree
+bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 90
+
+# 仅 Fleet + cmd_vel（无 Nav2）：用于 fleet 行为回归
+WITH_NAV2=0 bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 90
+```
+
+参数合并 CLI（也可用）：
+
+```bash
+fleet_merge_nav2_fleet_params /tmp/nav2_fleet.yaml
+```
+
+### log directory
+
+- 前缀：`/tmp/fleet_test_nav2_e2e_yield_<TIMESTAMP>/`
+- 主要文件：`gazebo.log`、`coord_robot_{a,b}.log`、`mock_path.log`、`nav2_robot_{a,b}.log`、`status_*.log`、`speed_*.log`、`yield.log`、`goal_*.log`（若启用目标）
+
+### modified files（本迭代）
+
+| 路径 | 说明 |
+|------|------|
+| `ros2_ws/src/fleet_nav2_bt/CMakeLists.txt` | 增加 `fleet_*_bt_node` 三套 BT 插件库（`BT_RegisterNodesFromPlugin`） |
+| `ros2_ws/src/fleet_nav2_bt/src/*.cpp` | 插件注册块；`CheckFleetConflict` 从 peers JSON 粗解析 `conflict_peer` |
+| `ros2_ws/src/fleet_nav2_bt/behavior_trees/navigate_with_fleet.xml` | `FollowPat` → `FollowPath`（对齐 nav2_params 默认 controller id） |
+| `ros2_ws/src/fleet_gazebo/fleet_gazebo/merge_nav2_fleet_params.py` | 合并系统 `nav2_params.yaml` + fleet 插件 + `default_nav_to_pose_bt_xml` |
+| `ros2_ws/src/fleet_gazebo/setup.py` / `package.xml` | `fleet_merge_nav2_fleet_params` 入口与依赖 |
+| `ros2_ws/src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh` | 走廊双机 + 双 Nav2(SLAM) + topic 采集 |
+| `ros2_ws/src/fleet_gazebo/scripts/move_robots_corridor_two.py` | 仅 `WITH_NAV2=0` 时的 cmd_vel 场景激励（测试 harness） |
+| `ros2_ws/src/fleet_gazebo/scripts/send_nav2_goal.py` | `nav2_simple_commander` 单目标（可选） |
+
+### Nav2 stack components（脚本侧）
+
+- `nav2_bringup/bringup_launch.py` ×2：`namespace=robot_{a,b}`，`slam:=True`，`use_namespace:=True`
+- 参数：合并后的 `nav2_params.yaml` + fleet BT 插件名 + `navigate_with_fleet.xml`
+- 仿真：Gazebo `corridor.world`，双 TurtleBot3 burger，每个命名空间 `robot_state_publisher`
+- Fleet：`fleet_coordinator` ×2 + `mock_path_publisher_all.py`
+
+### BT XML used
+
+- `fleet_nav2_bt/behavior_trees/navigate_with_fleet.xml`（由 `default_nav_to_pose_bt_xml` 指向）
+
+### `/speed_limit` result
+
+- **期望 topic**：`/robot_a/speed_limit`、`/robot_b/speed_limit`（由命名空间内 `AdjustSpeedForFleet` 发布）
+- **判定**：需在 `nav2_robot_*.log` / `speed_*.log` 中出现 `nav2_msgs/msg/SpeedLimit` 且 `percentage: true`，并与 coordinator `speed_ratio` 趋势一致。
+- **注意**：本场景依赖 Nav2 生命周期与 SLAM 稳定；若 `bt_navigator` 未进入 active 或插件加载失败，则可能无 `speed_limit`。
+
+### yield / resume result
+
+- `WaitForYieldClear` 依赖 blackboard `conflict_peer`；本迭代在 `CheckFleetConflict` 中从 `coordinator_status` 的 `peers[0].robot_id` **粗解析**首个 peer（仅解析/接线，未改协调算法）。
+- **PARTIAL 说明**：全闭环 yield/resume 仍依赖真实路径冲突 + 协调器状态进入 YIELDING/PASSING + BT 进入 yield 分支；脚本仅提供可重复启动链路与日志采集位点。
+
+### state transition result
+
+- 以 `status_*.log` / `coord_*.log` 中 `STATE_CHANGE` / JSON `state` 为准；本报告不在此伪造具体时间线。
+
+### collision / deadlock / emergency result
+
+- 本自动化脚本**未**内置碰撞计数器；需离线分析 Gazebo 接触或 odom 日志。**不得**无证据写 0 碰撞 PASS。
+
+### build result
+
+- 以 `colcon build --symlink-install` 在目标机（ROS 2 Humble）输出为准。
+
+### test result
+
+- 以 `colcon test` 与 `colcon test-result --verbose` 为准。
+
+### Final verdict（本子场景）
+
+**PARTIAL PASS**：已提供 Nav2 双栈 + fleet BT 合并参数与走廊采集脚本；**完整** e2e yield、`/speed_limit` 在 **bt_navigator active** 下的动态验证、以及零碰撞/零死锁**仍待**在目标环境用日志证据闭环。
+
+### Remaining risks
+
+1. 双机 SLAM + 双 Nav2 资源占用高，ECS/笔记本可能无法在 90s 内稳定 activate。  
+2. `plugin_lib_names` 依赖工作空间 `AMENT_PREFIX_PATH` 找到 `libfleet_*_bt_node.so`。  
+3. `fleet_merge_nav2_fleet_params` 对上游 `nav2_params.yaml` 做 YAML 读写，上游格式重大变更时需回归。  
+
+### Next steps
+
+1. 在稳定机器上跑一次 `WITH_NAV2=1 WITH_GOALS=1`，归档 `fleet_test_nav2_e2e_yield_*` 原始日志进行分析。  
+2. 若 `bt_navigator` 报错插件/XML，单独截取 `nav2_robot_*.log` 做最小复现。  
+3. 将 ProgressChecker / recovery 行为纳入单独子节（需更长航时）。
+

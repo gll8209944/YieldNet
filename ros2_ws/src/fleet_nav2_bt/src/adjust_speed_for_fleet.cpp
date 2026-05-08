@@ -126,7 +126,7 @@ AdjustSpeedForFleet::AdjustSpeedForFleet(
   // This node uses it for BT state awareness only
   state_sub_ = node_->create_subscription<std_msgs::msg::String>(
     "fleet/coordinator_status",
-    rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
+    rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
     [this](const std_msgs::msg::String::SharedPtr msg) {
       current_fleet_state_ = msg->data;
 
@@ -201,3 +201,13 @@ BT::NodeStatus AdjustSpeedForFleet::tick()
 }
 
 }  // namespace fleet_nav2_bt
+
+#ifdef FLEET_NAV2_BT_PLUGIN
+#include "behaviortree_cpp_v3/bt_factory.h"
+
+BT_REGISTER_NODES(factory)
+{
+  factory.registerNodeType<fleet_nav2_bt::AdjustSpeedForFleet>("AdjustSpeedForFleet");
+}
+#endif
+

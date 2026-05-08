@@ -13,8 +13,14 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*')),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'scripts'), glob('scripts/*.py')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'PyYAML'],
+    entry_points={
+        'console_scripts': [
+            'fleet_merge_nav2_fleet_params = fleet_gazebo.merge_nav2_fleet_params:main',
+        ],
+    },
     zip_safe=True,
     maintainer='guolinlin',
     maintainer_email='guolinlin@hotmail.com',

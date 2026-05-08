@@ -22,7 +22,7 @@
         <!-- Adjust speed based on fleet state -->
         <AdjustSpeedForFleet default_speed="0.5">
           <!-- Follow the computed path with speed adjustment -->
-          <FollowPath path="{path}" controller_id="FollowPat"/>
+          <FollowPath path="{path}" controller_id="FollowPath"/>
         </AdjustSpeedForFleet>
       </ReactiveSequence>
     </PipelineSequence>

@@ -147,3 +147,13 @@ void WaitForYieldClear::sendYieldCommand(uint8_t command)
 }
 
 }  // namespace fleet_nav2_bt
+
+#ifdef FLEET_NAV2_BT_PLUGIN
+#include "behaviortree_cpp_v3/bt_factory.h"
+
+BT_REGISTER_NODES(factory)
+{
+  factory.registerNodeType<fleet_nav2_bt::WaitForYieldClear>("WaitForYieldClear");
+}
+#endif
+

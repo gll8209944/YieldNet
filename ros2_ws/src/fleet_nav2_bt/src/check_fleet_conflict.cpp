@@ -109,6 +109,22 @@ static bool extractSpeedRatio(const std::string& json_str, std::string& out_valu
   return true;
 }
 
+// First peer robot_id listed under the coordinator "peers" array (minimal string scan).
+static bool extractFirstPeerRobotId(const std::string & json_str, std::string & out_peer)
+{
+  const std::string peers_key = "\"peers\"";
+  size_t p = json_str.find(peers_key);
+  if (p == std::string::npos) {
+    return false;
+  }
+  size_t bracket = json_str.find('[', p);
+  if (bracket == std::string::npos) {
+    return false;
+  }
+  std::string inner = json_str.substr(bracket + 1, 4096);
+  return extractJsonStringField(inner, "robot_id", out_peer);
+}
+
 CheckFleetConflict::CheckFleetConflict(
   const std::string & condition_name,
   const BT::NodeConfiguration & conf)
@@ -122,11 +138,15 @@ CheckFleetConflict::CheckFleetConflict(
   // This node uses it for BT state awareness only, not as production control contract
   state_sub_ = node_->create_subscription<std_msgs::msg::String>(
     "fleet/coordinator_status",
-    rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
+    rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
     [this](const std_msgs::msg::String::SharedPtr msg) {
       current_fleet_state_ = msg->data;
       // Also extract speed_ratio for use in tick
       extractSpeedRatio(msg->data, current_speed_ratio_);
+      std::string peer_candidate;
+      if (extractFirstPeerRobotId(msg->data, peer_candidate)) {
+        conflict_peer_ = peer_candidate;
+      }
       state_received_ = true;
     });
 }
@@ -169,3 +189,13 @@ BT::NodeStatus CheckFleetConflict::tick()
 }
 
 }  // namespace fleet_nav2_bt
+
+#ifdef FLEET_NAV2_BT_PLUGIN
+#include "behaviortree_cpp_v3/bt_factory.h"
+
+BT_REGISTER_NODES(factory)
+{
+  factory.registerNodeType<fleet_nav2_bt::CheckFleetConflict>("CheckFleetConflict");
+}
+#endif
+
