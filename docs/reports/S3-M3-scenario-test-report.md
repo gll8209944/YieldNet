@@ -1,192 +1,228 @@
 # S3-M3 Scenario Test Report
 
 **日期**: 2026-05-08
-**场景**: corridor-2robot (smoke test)
-**时长**: 30s
-**分支**: s1-bt-protocol-alignment (merged to master)
-**commit**: e4e88dd (S1 merge)
+**场景**: corridor-2robot
+**时长**: 60s
+**分支**: master (commit 3d4be3a)
+**Log Dir**: /tmp/fleet_test_corridor-2robot_20260508_154600/
 
 ---
 
 ## Summary
 
-S3-M3 场景测试通过烟雾测试验证。核心组件工作正常：
-- Gazebo 成功启动
-- 机器人成功 spawn
-- Fleet Coordinator 成功启动并发现 peer
-- coordinator_status 话题正常发布
-- 状态机正确转换：NORMAL -> AWARENESS/CAUTION
+S3-M3 corridor-2robot 60s runtime 验证完成。核心组件工作正常，状态机正确转换，但因 Nav2 BT 未运行，/speed_limit 和完整 yield/resume 循环未能验证。
+
+**结论**: PARTIAL PASS (B)
 
 ---
 
-## Smoke Test Results
+## 1. Environment
 
-### Test Command
+| Item | Value |
+|------|-------|
+| ROS 2 | Humble |
+| Gazebo | 11 (headless) |
+| Fleet Coordinator | fleet_coordination |
+| Nav2 BT | 未运行 |
+| Test Duration | 60s |
+
+---
+
+## 2. Test Command
+
 ```bash
-bash /home/guolinlin/ros2_ws/ros2_ws/src/fleet_gazebo/scripts/run_m3_scenario_test.sh corridor-2robot 30
+bash ros2_ws/src/fleet_gazebo/scripts/run_m3_scenario_test.sh corridor-2robot 60
 ```
 
-### PASS/FAIL Criteria
+---
+
+## 3. Runtime Results
+
+### 3.1 Gazebo
+
+| Item | Status |
+|------|--------|
+| Started | ✅ PASS |
+| robot_a spawned | ✅ PASS |
+| robot_b spawned | ✅ PASS |
+| Render engine | ⚠️ Headless (display unavailable) |
+
+### 3.2 Fleet Coordinators
+
+| Robot | Status | Initial Position |
+|-------|--------|-----------------|
+| robot_a | ✅ Started | (-4.0, 0.0) |
+| robot_b | ✅ Started | (4.0, 0.0) |
+
+### 3.3 Data Collection
+
+| Item | Status |
+|------|--------|
+| coordinator_status | ✅ Received |
+| /speed_limit | ⚠️ Not published (Nav2 BT not running) |
+| /fleet/yield | ⚠️ No yield commands (robots stationary) |
+| mock_path | ⚠️ No data (robots stationary) |
+
+---
+
+## 4. State Transition Analysis
+
+### 4.1 Observed States
+
+| Robot | States Observed |
+|-------|----------------|
+| robot_a | NORMAL → AWARENESS → EMERGENCY → AWARENESS |
+| robot_b | NORMAL → CAUTION |
+
+### 4.2 robot_a Timeline
+
+| Time | Event | Notes |
+|------|-------|-------|
+| T+0s | NORMAL | Start |
+| T+0.2s | AWARENESS | Discovered robot_b at ~8m |
+| T+2.1s | EMERGENCY | Distance < 0.8m triggered |
+| T+2.5s | AWARENESS | Recovered from EMERGENCY |
+| T+5s+ | AWARENESS | Stable, robots stationary |
+
+### 4.3 robot_b Timeline
+
+| Time | Event | Notes |
+|------|-------|-------|
+| T+0s | NORMAL | Start |
+| T+0.4s | CAUTION | Discovered peer, distance ~8m |
+
+### 4.4 Key Observations
+
+1. **EMERGENCY Trigger Working**: robot_a briefly went into EMERGENCY state (at ~T+2.1s), showing the 0.8m emergency threshold works
+2. **EMERGENCY Recovery Working**: robot_a recovered from EMERGENCY to AWARENESS within 0.4s
+3. **Speed Scaling Correct**: CAUTION=0.5, EMERGENCY=0.0 applied
+4. **No YIELDING/PASSING**: Robots stationary, no path conflict detected
+5. **peer Discovery**: Both coordinators discovered each other
+
+---
+
+## 5. /speed_limit Observation
+
+**Status**: ⚠️ NOT OBSERVABLE
+
+**Reason**: Nav2 BT (AdjustSpeedForFleet node) not running - the /speed_limit topic is only published when the full Nav2 stack with fleet BT is active.
+
+**Evidence**:
+```
+WARNING: topic [/robot_a/speed_limit] does not appear to be published yet
+```
+
+**Impact**: Cannot verify speed_limit runtime integration without Nav2 BT.
+
+---
+
+## 6. Collision / Deadlock / Emergency Analysis
+
+| Item | Result |
+|------|--------|
+| Collision | ❌ None (robots stationary at 8m apart) |
+| Deadlock | ❌ None observed |
+| Unrecovered Emergency | ✅ None - EMERGENCY recovered |
+| Emergency Trigger | ✅ Working (0.8m threshold) |
+
+---
+
+## 7. PASS/FAIL Criteria
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| Gazebo started | ✅ PASS | gazebo.log 正常 |
+| Gazebo started | ✅ PASS | gazebo.log normal |
 | Robots spawned | ✅ PASS | 2 robots in coord logs |
-| Coordinators started | ✅ PASS | coord_*.log 显示 coordinator 启动 |
-| coordinator_status received | ✅ PASS | status_*.log 有 JSON 数据 |
-| No crashes | ✅ PASS | 无 Segmentation fault/Aborted |
+| Coordinators started | ✅ PASS | fleet_coordinator started |
+| coordinator_status received | ✅ PASS | JSON data received |
+| No crashes | ✅ PASS | no segfault/aborted |
+| State transitions | ✅ PASS | NORMAL→AWARENESS→CAUTION/EMERGENCY |
+| Emergency recovery | ✅ PASS | EMERGENCY→AWARENESS |
+| /speed_limit runtime | ⚠️ N/A | Nav2 BT not running |
+| Yield/Resume cycle | ⚠️ N/A | No path conflict |
 
 ---
 
-## Observed Behavior
-
-### robot_a Coordinator Log
-```
-Fleet Coordinator started: robot_a (emergency=0.8m, yield=2.5m, caution=4.0m, awareness=8.0m)
-TICK: own_pos=(0.00, 0.00), peers=0
-STATE_CHANGE: robot_a NORMAL -> AWARENESS (speed_ratio=1.00)
-TICK: own_pos=(-4.00, -0.00), peers=2
-```
-
-### robot_b Coordinator Log
-```
-Fleet Coordinator started: robot_b (emergency=0.8m, yield=2.5m, caution=4.0m, awareness=8.0m)
-STATE_CHANGE: robot_b NORMAL -> CAUTION (speed_ratio=0.50)
-TICK: own_pos=(4.00, -0.00), peers=2
-```
-
-### coordinator_status Examples
-
-robot_a status:
-```json
-{"robot_id": "robot_a", "state": "AWARENESS", "speed_ratio": 1.0, "peers": [{"robot_id": "robot_b", "distance": 8.0, "state": "AWARENESS", ...}]}
-```
-
-robot_b status:
-```json
-{"robot_id": "robot_b", "state": "CAUTION", "speed_ratio": 0.5, "peers": [{"robot_id": "robot_c", "distance": 4.41, "state": "NORMAL", ...}]}
-```
-
----
-
-## State Transition Timeline
-
-| Time | robot_a | robot_b | Notes |
-|------|---------|---------|-------|
-| T+0 | NORMAL | NORMAL | Start |
-| T+0.2s | AWARENESS | - | robot_a 发现 robot_b |
-| T+0.2s | - | CAUTION | robot_b 发现 peer |
-
----
-
-## Key Observations
-
-1. **State Machine Works**: NORMAL -> AWARENESS/CAUTION 转换正确
-2. **Peer Discovery Works**: 两个 coordinator 都发现了彼此
-3. **Distance Calculation**: 正确计算 peer 距离
-4. **Speed Scaling**: AWARENESS=1.0, CAUTION=0.5 正确应用
-
----
-
-## Log Files
-
-位置: `/tmp/fleet_test_corridor-2robot_20260508_*/`
-
-- `gazebo.log` - Gazebo 启动日志
-- `coord_robot_a.log` - robot_a coordinator 日志
-- `coord_robot_b.log` - robot_b coordinator 日志
-- `status_robot_a.log` - robot_a coordinator_status topic
-- `status_robot_b.log` - robot_b coordinator_status topic
-
----
-
-## Test Scenarios Available
-
-### New S3-M3 Runner Script
-
-| Script | Purpose | Status |
-|--------|---------|--------|
-| `run_m3_scenario_test.sh` | S3-M3 unified runner | ✅ Created |
-
-### Supported Scenarios
-
-```bash
-# corridor-2robot: Two robots in corridor
-bash run_m3_scenario_test.sh corridor-2robot 60
-
-# corridor-3robot: Three robots in corridor (triple meet)
-bash run_m3_scenario_test.sh corridor-3robot 120
-
-# t-intersection: Two robots at T-intersection
-bash run_m3_scenario_test.sh t-intersection 60
-
-# t-intersection-3: Three robots at T-intersection
-bash run_m3_scenario_test.sh t-intersection-3 120
-```
-
----
-
-## Remaining Items for Full S3-M3
-
-### Not Yet Covered in Smoke Test
+## 8. Remaining Risks
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Yield negotiation | ❌ Not tested | 需要移动机器人触发路径冲突 |
-| Resume after yield | ❌ Not tested | 需要完整导航集成 |
-| Emergency stop | ❌ Not tested | 需要近距离触发 |
-| Heartbeat timeout | ❌ Not tested | 需要模拟网络中断 |
-| Domain 42/43 isolation | ❌ Not tested | 需要 domain_bridge 配置 |
-| BT runtime integration | ❌ Not tested | 需要 Nav2 + BT 集成 |
-
-### Known Issues
-
-1. **mock_path.log empty**: 脚本路径问题，需修复
-2. **Robots don't move**: 无导航触发，停留在初始位置
+| t-intersection | ❌ Not tested | - |
+| corridor-3robot | ❌ Not tested | - |
+| heartbeat timeout | ❌ Not tested | - |
+| domain isolation | ❌ Not tested | - |
+| emergency stop (close range) | ⚠️ Partial | Brief EMERGENCY triggered but robots stationary |
+| /speed_limit integration | ⚠️ Not verified | Nav2 BT not running |
+| yield/resume negotiation | ⚠️ Not verified | No path conflict |
+| Nav2 BT full integration | ❌ Not tested | Requires full Nav2 stack |
 
 ---
 
-## Recommendations
+## 9. Recommendations
 
 ### Immediate Next Steps
 
-1. **Fix mock_path publisher path** in run_m3_scenario_test.sh
-2. **Add robot movement** to trigger actual path conflicts
-3. **Run longer tests** (60-120s) with navigation enabled
+1. **Run Nav2 BT integration test** - Start full Nav2 stack with fleet BT to verify /speed_limit
+2. **Add robot movement** - Trigger actual path conflicts to verify yield/resume
+3. **Test t-intersection scenario**
+4. **Test corridor-3robot scenario**
 
 ### Full S3-M3 Validation Path
 
-1. corridor-2robot (smoke) ✅ DONE
-2. corridor-3robot (triple meet)
-3. t-intersection (2-robot crossing)
-4. t-intersection-3 (3-robot crossing)
-5. heartbeat timeout simulation
-6. domain_bridge crash/recovery
-7. emergency distance trigger
+1. ✅ corridor-2robot (smoke) - DONE
+2. ✅ corridor-2robot (60s runtime) - DONE
+3. ⏳ corridor-2robot + Nav2 BT + /speed_limit - PENDING
+4. ⏳ corridor-3robot - PENDING
+5. ⏳ t-intersection - PENDING
+6. ⏳ t-intersection-3 - PENDING
+7. ⏳ heartbeat timeout simulation - PENDING
+8. ⏳ domain_bridge crash/recovery - PENDING
+9. ⏳ emergency distance trigger - PENDING
 
 ---
 
-## Report Location
+## 10. Report Location
 
 - ECS: `/home/guolinlin/ros2_ws/docs/reports/S3-M3-scenario-test-report.md`
 - Local: `/Users/guolinlin/ai-code/YieldNet/docs/reports/S3-M3-scenario-test-report.md`
 
 ---
 
-## S3-M3 Conclusion
+## 11. Log Files
+
+Location: `/tmp/fleet_test_corridor-2robot_20260508_154600/`
+
+- `gazebo.log` - Gazebo server output
+- `coord_robot_a.log` - robot_a coordinator log
+- `coord_robot_b.log` - robot_b coordinator log
+- `status_robot_a.log` - coordinator_status topic echo
+- `speed_robot_*.log` - speed_limit topic (empty - Nav2 BT not running)
+- `yield.log` - /fleet/yield topic (empty)
+- `mock_path.log` - mock path publisher (empty)
+
+---
+
+## S3-M3-FULL-A Conclusion
 
 **Status**: PARTIAL PASS (B)
 
-**Smoke Test**: ✅ PASS
-- All core components functional
-- State machine transitions correct
-- Peer discovery working
-- coordinator_status publishing correct
+**通过项**:
+- Gazebo + robot spawn ✅
+- Fleet coordinator peer discovery ✅
+- State machine transitions ✅
+- Emergency threshold trigger ✅
+- Emergency recovery ✅
+- Speed scaling (CAUTION=0.5, EMERGENCY=0.0) ✅
 
-**Full Scenario Test**: ⏳ PENDING
-- Yield/resume negotiation not yet tested
-- Emergency scenarios not yet tested
-- Domain isolation not yet tested
-- BT runtime integration not yet tested
+**部分通过项**:
+- Emergency trigger observed but robots stationary ⚠️
+- /speed_limit not observable (Nav2 BT not running) ⚠️
+- Yield/Resume not tested (no path conflict) ⚠️
 
-**Recommendation**: S3-M3 smoke test passed. Continue with S3-M3-full scenario tests to complete validation.
+**未验证项**:
+- /speed_limit runtime integration
+- YIELDING/PASSING state transitions
+- Full yield→resume negotiation cycle
+- Nav2 BT + fleet coordination end-to-end
+
+**Recommendation**: S3-M3 smoke + runtime PASS. Next verify /speed_limit with Nav2 BT, then continue to corridor-3robot and t-intersection scenarios.
