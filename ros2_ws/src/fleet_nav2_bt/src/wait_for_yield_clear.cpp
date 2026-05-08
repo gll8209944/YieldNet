@@ -1,4 +1,5 @@
 #include "fleet_nav2_bt/wait_for_yield_clear.hpp"
+#include "fleet_nav2_bt/bt_ros_host_utils.hpp"
 
 #include <string>
 #include <memory>
@@ -22,7 +23,7 @@ WaitForYieldClear::WaitForYieldClear(
   const std::string & action_name,
   const BT::NodeConfiguration & conf)
 : BT::ActionNodeBase(action_name, conf),
-  node_(rclcpp::Node::make_shared("wait_for_yield_clear")),
+  node_(host_node_from_tree_config(conf, "wait_for_yield_clear")),
   resume_received_(false),
   yield_ack_received_(false),
   timeout_(15.0),

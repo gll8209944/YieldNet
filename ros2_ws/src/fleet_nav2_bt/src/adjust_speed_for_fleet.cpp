@@ -1,4 +1,5 @@
 #include "fleet_nav2_bt/adjust_speed_for_fleet.hpp"
+#include "fleet_nav2_bt/bt_ros_host_utils.hpp"
 
 #include <string>
 #include <memory>
@@ -109,7 +110,7 @@ AdjustSpeedForFleet::AdjustSpeedForFleet(
   const std::string & name,
   const BT::NodeConfiguration & conf)
 : BT::DecoratorNode(name, conf),
-  node_(rclcpp::Node::make_shared("adjust_speed_for_fleet")),
+  node_(host_node_from_tree_config(conf, "adjust_speed_for_fleet")),
   default_speed_(0.5),
   current_speed_ratio_(1.0),
   last_published_speed_ratio_(1.0)

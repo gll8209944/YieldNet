@@ -1,4 +1,5 @@
 #include "fleet_nav2_bt/check_fleet_conflict.hpp"
+#include "fleet_nav2_bt/bt_ros_host_utils.hpp"
 
 #include <string>
 #include <memory>
@@ -112,7 +113,7 @@ CheckFleetConflict::CheckFleetConflict(
   const std::string & condition_name,
   const BT::NodeConfiguration & conf)
 : BT::ConditionNode(condition_name, conf),
-  node_(rclcpp::Node::make_shared("check_fleet_conflict")),
+  node_(host_node_from_tree_config(conf, "check_fleet_conflict")),
   state_received_(false),
   conflict_peer_("unknown")
 {

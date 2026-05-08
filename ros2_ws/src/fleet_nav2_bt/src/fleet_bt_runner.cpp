@@ -44,7 +44,7 @@ const std::string FLEET_BT_XML = R"(
 </root>
 )";
 
-class FleetBTRunner : public rclcpp::Node
+class FleetBTRunner : public rclcpp::Node, public std::enable_shared_from_this<FleetBTRunner>
 {
 public:
   FleetBTRunner()
@@ -55,15 +55,15 @@ public:
     this->declare_parameter("bt_xml", FLEET_BT_XML);
 
     robot_id_ = this->get_parameter("robot_id").as_string();
-    std::string peer_id = this->get_parameter("peer_id").as_string();
-    std::string bt_xml = this->get_parameter("bt_xml").as_string();
-    if (bt_xml.empty()) {
-      bt_xml = FLEET_BT_XML;
+    peer_id_ = this->get_parameter("peer_id").as_string();
+    bt_xml_ = this->get_parameter("bt_xml").as_string();
+    if (bt_xml_.empty()) {
+      bt_xml_ = FLEET_BT_XML;
     }
 
     RCLCPP_INFO(
       this->get_logger(), "FleetBTRunner starting for %s (peer_id=%s)", robot_id_.c_str(),
-      peer_id.c_str());
+      peer_id_.c_str());
 
     // Create BT factory and register nodes
     factory_ = std::make_unique<BT::BehaviorTreeFactory>();
@@ -72,18 +72,20 @@ public:
     factory_->registerNodeType<fleet_nav2_bt::CheckFleetConflict>("CheckFleetConflict");
     factory_->registerNodeType<fleet_nav2_bt::WaitForYieldClear>("WaitForYieldClear");
     factory_->registerNodeType<fleet_nav2_bt::AdjustSpeedForFleet>("AdjustSpeedForFleet");
+  }
 
+  /** Call immediately after std::make_shared<FleetBTRunner>() so blackboard can use shared_from_this(). */
+  void finish_construction()
+  {
     BT::Blackboard::Ptr blackboard = BT::Blackboard::create();
     blackboard->set("robot_id", robot_id_);
-    blackboard->set("peer_id", peer_id);
+    blackboard->set("peer_id", peer_id_);
+    blackboard->set<rclcpp::Node::SharedPtr>("node", shared_from_this());
 
-    // Create tree ({robot_id}, {peer_id} substituted from blackboard)
-    tree_ = factory_->createTreeFromText(bt_xml, blackboard);
+    tree_ = factory_->createTreeFromText(bt_xml_, blackboard);
 
-    // Create logger
     logger_ = std::make_unique<BT::StdCoutLogger>(tree_);
 
-    // Create timer for tree tick
     timer_ = this->create_wall_timer(
       100ms,
       [this]() { this->tickTree(); }
@@ -105,6 +107,8 @@ private:
   }
 
   std::string robot_id_;
+  std::string peer_id_;
+  std::string bt_xml_;
   std::unique_ptr<BT::BehaviorTreeFactory> factory_;
   BT::Tree tree_;
   std::unique_ptr<BT::StdCoutLogger> logger_;
@@ -116,6 +120,7 @@ int main(int argc, char ** argv)
   rclcpp::init(argc, argv);
 
   auto node = std::make_shared<FleetBTRunner>();
+  node->finish_construction();
 
   RCLCPP_INFO(node->get_logger(), "Spinning fleet_bt_runner...");
   rclcpp::spin(node);
