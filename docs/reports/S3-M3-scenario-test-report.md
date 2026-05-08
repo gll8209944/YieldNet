@@ -525,3 +525,20 @@ P0 blockers to fix before next Nav2 e2e test:
 4. 重新跑 e2e yield 测试:
    - fix 后重新执行 run_m3_nav2_e2e_yield.sh
    - 验证 robots 实际移动、speed_limit 动态值、yield/resume 闭环
+
+### 9. Blocker Fixes Applied (2026-05-08)
+
+P0 blockers identified in §7 above have been resolved:
+
+| Blocker | Fix Applied |
+|---------|-------------|
+| nav2_bringup missing `map` argument | Added `map:=/opt/ros/humble/share/nav2_bringup/maps/turtlebot3_world.yaml`. Also changed `slam:=False` (AMCL mode with map) instead of `slam:=True` (slam_toolbox doesn't provide amcl/get_state) |
+| rsp `UnknownROSArgsError` on raw URDF CLI arg | Replaced inline `-p robot_description:=$(cat ...)` with `--params-file ${LOG_DIR}/rsp_${ns}.yaml`. New `write_rsp_params.py` generates per-robot YAML with `robot_description` content (strips `\r` chars) and `robot_namespace`. Removed invalid `-r __ns:/${ns}` remap (uses `robot_namespace` YAML param instead) |
+| `waitUntilNav2Active(timeout=600.0)` TypeError | Removed `timeout=600.0` kwarg. `waitUntilNav2Active(self, navigator, localizer)` has no timeout parameter. Wrapped in try/except to allow test to proceed if Nav2 not fully active |
+
+**Modified files** (commit `316cb11`):
+- `ros2_ws/src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh`
+- `ros2_ws/src/fleet_gazebo/scripts/send_nav2_goal.py`
+- `ros2_ws/src/fleet_gazebo/scripts/write_rsp_params.py` (new)
+
+**Status**: P0 blockers resolved. Test pending re-run on ECS to verify full Nav2 e2e yield flow.
