@@ -287,3 +287,241 @@ fleet_merge_nav2_fleet_params /tmp/nav2_fleet.yaml
 2. 若 `bt_navigator` 报错插件/XML，单独截取 `nav2_robot_*.log` 做最小复现。  
 3. 将 ProgressChecker / recovery 行为纳入单独子节（需更长航时）。
 
+
+---
+
+## Scenario: Nav2 e2e yield log offline judgment
+
+**LOG_DIR**: 
+**Analyzed files**: , , , , , , , , , , , , , , 
+
+### 1.  Evidence
+
+| File | Result |
+|------|--------|
+| speed_robot_a.log | EMPTY (0 bytes) |
+| speed_robot_b.log | EMPTY (0 bytes) |
+| All logs grep | No  /  /  found |
+
+**判定**: FAIL —  topic 没有任何消息，topic collector 未收到任何数据。
+
+### 2. State Transition Evidence
+
+**robot_a**:
+-  (initial transitions at t≈0)
+- No further state changes
+- Stuck at  — no movement
+
+**robot_b**:
+-  (initial transitions at t≈0)
+- No further state changes
+- Stuck at  — no movement
+
+**peer distance**: 8.0m (at CAUTION threshold)
+
+**判定**: PARTIAL — 状态机初始转换正确，但未达到 YIELDING/PASSING，robots 未移动，无 yield/resume 触发。
+
+### 3.  Evidence
+
+| File | Result |
+|------|--------|
+| yield.log | EMPTY (0 bytes) |
+| All logs grep | No , , ,  found |
+
+**判定**: FAIL — 无任何 yield 消息，yield/resume 流程未触发。
+
+### 4. Nav2 / Gazebo Error Summary
+
+| Component | Error | Impact |
+|-----------|-------|--------|
+| Nav2 launch (robot_a/robot_b) |  | Nav2 stack 未启动 |
+| robot_state_publisher (robot_a/robot_b) |  — raw URDF XML passed as CLI args | rsp 崩溃，TF tree 不完整 |
+| send_nav2_goal.py (robot_a/robot_b) |  | goal 未发出 |
+| Gazebo | Normal startup, robots spawned, graceful SIGTERM | 本身正常 |
+
+**根因分析**:
+1.  将 URDF 文件内容（XML 字符串）错误地作为 CLI 参数传递，而非通过标准 xacro 机制处理
+2. Nav2  launch 缺少  参数，无法启动 slam 或 map-based navigation
+3.  使用了与当前  API 不兼容的  调用
+
+**判定**: FAIL — Nav2 stack 未就绪，goals 未发出，robots 未移动。
+
+### 5. PASS / PARTIAL / FAIL 对照表
+
+| 检查项 | PASS 条件 | 实际证据 | 判定 | 备注 |
+|--------|-----------|----------|------|------|
+| Gazebo start | Gazebo running | ✅ 正常启动，robots spawn | PASS | - |
+| Fleet coordinator start | coordinator running | ✅ 正常启动并 tick | PASS | - |
+| Nav2 stack start | nav2 bringup without error | ❌  argument missing | FAIL | blocker |
+| Goals fired | send_nav2_goal.py success | ❌ TypeError on timeout kwarg | FAIL | blocker |
+| Robot movement | odom position changes | ❌ 位置固定 (-4,0) / (4,0) | FAIL | robots 未动 |
+|  messages | topic has SpeedLimit data | ❌ 0 bytes, no data | FAIL | Nav2 未启动 |
+| speed_limit dynamic values | 50/0/100% observed | ❌ 无数据 | FAIL | - |
+| State transition to YIELDING | YIELDING state logged | ❌ 仅 CAUTION | FAIL | 无冲突触发 |
+| yield request/ack/resume | /fleet/yield messages | ❌ 0 bytes, no data | FAIL | - |
+| Collision evidence | collision detected | ❌ 无 | PASS | 场景未运行 |
+| Deadlock evidence | stuck state, no recovery | ⚠️ robots stuck at CAUTION | PARTIAL | 非 deadlock，仅仅是未运行 |
+| Emergency evidence | EMERGENCY state | ✅ 初始 EMERGENCY 有触发但快速解除 | PASS | 正常 |
+| Robot state publisher | rsp not crashed | ❌ UnknownROSArgsError | FAIL | URDF 参数错误 |
+
+### 6. Final Verdict
+
+**FAIL**
+
+理由：
+1. Nav2 stack 未启动（ argument missing）
+2.  崩溃（URDF 被当作 CLI 参数传递）
+3. Goals 未发出（ API 不兼容）
+4. Robots 未移动 — 全程位置固定
+5.  无任何数据
+6.  无任何数据
+7. YIELDING/PASSING 状态未触发
+
+fleet_coordinator 本身的 CAUTION 状态转换是正常的，但完整的 Nav2 e2e yield 流程被上述 blocker 阻断。
+
+### 7. Remaining Risks
+
+1. **Nav2 map argument** —  launch 需要  参数，当前脚本未提供
+2. **rsp URDF passing** — URDF 应通过 xacro 处理后传递，不应作为 raw CLI 参数
+3. **waitUntilNav2Active API** — Python API 与  版本不匹配
+4. **fleet_coordinator 单机 CAUTION** — 协调器单独可工作，但无法驱动 Nav2 完整栈
+
+### 8. Next Recommendation
+
+**P0 blockers to fix before next Nav2 e2e test**:
+
+1. **Fix  API call**:
+   - 移除或修正  调用
+   - 检查当前  /  API
+
+2. **Fix Nav2 launch to provide map**:
+   - 要么提供真实 map yaml
+   - 要么使用 slam 模式（）并提供对应参数
+
+3. **Fix  invocation**:
+   - 确保 URDF 通过  预处理后再传给 rsp
+   - 检查脚本中 rsp 的启动命令
+
+4. **重新跑 e2e yield 测试**:
+   - fix 后重新执行 
+   - 验证 robots 实际移动、speed_limit 动态值、yield/resume 闭环
+
+
+
+---
+
+## Scenario: Nav2 e2e yield log offline judgment
+
+**LOG_DIR**: 
+**Analyzed files**: coord_robot_a.log, coord_robot_b.log, status_robot_a.log, status_robot_b.log, gazebo.log, mock_path.log, nav2_robot_a.log, nav2_robot_b.log, goal_robot_a.log, goal_robot_b.log, rsp_robot_a.log, rsp_robot_b.log, speed_robot_a.log, speed_robot_b.log, yield.log
+
+### 1. /speed_limit Evidence
+
+| File | Result |
+|------|--------|
+| speed_robot_a.log | EMPTY (0 bytes) |
+| speed_robot_b.log | EMPTY (0 bytes) |
+| All logs grep | No speed_limit / SpeedLimit / percentage found |
+
+**判定**: FAIL - /speed_limit topic 没有任何消息，topic collector 未收到任何数据。
+
+### 2. State Transition Evidence
+
+robot_a:
+- NORMAL -> EMERGENCY -> CAUTION (initial transitions at t=0)
+- No further state changes
+- Stuck at own_pos=(-4.00, 0.00) - no movement
+
+robot_b:
+- NORMAL -> EMERGENCY -> CAUTION (initial transitions at t=0)
+- No further state changes
+- Stuck at own_pos=(4.00, 0.00) - no movement
+
+peer distance: 8.0m (at CAUTION threshold)
+
+**判定**: PARTIAL - 状态机初始转换正确，但未达到 YIELDING/PASSING，robots 未移动，无 yield/resume 触发。
+
+### 3. /fleet/yield Evidence
+
+| File | Result |
+|------|--------|
+| yield.log | EMPTY (0 bytes) |
+| All logs grep | No REQUEST_YIELD, ACK_YIELD, RESUME, EMERGENCY_STOP found |
+
+**判定**: FAIL - 无任何 yield 消息，yield/resume 流程未触发。
+
+### 4. Nav2 / Gazebo Error Summary
+
+| Component | Error | Impact |
+|-----------|-------|--------|
+| Nav2 launch (robot_a/robot_b) | ERROR: Included launch description missing required argument map | Nav2 stack 未启动 |
+| robot_state_publisher (robot_a/robot_b) | rclcpp::exceptions::UnknownROSArgsError - raw URDF XML passed as CLI args | rsp 崩溃，TF tree 不完整 |
+| send_nav2_goal.py (robot_a/robot_b) | TypeError: BasicNavigator.waitUntilNav2Active() got an unexpected keyword argument timeout | goal 未发出 |
+| Gazebo | Normal startup, robots spawned, graceful SIGTERM | 本身正常 |
+
+根因分析:
+1. rsp 将 URDF 文件内容（XML 字符串）错误地作为 CLI 参数传递，而非通过标准 xacro 机制处理
+2. Nav2 nav2_bringup launch 缺少 map 参数，无法启动 slam 或 map-based navigation
+3. send_nav2_goal.py 使用了与当前 nav2_py_tutorial API 不兼容的 waitUntilNav2Active(timeout=600.0) 调用
+
+**判定**: FAIL - Nav2 stack 未就绪，goals 未发出，robots 未移动。
+
+### 5. PASS / PARTIAL / FAIL 对照表
+
+| 检查项 | PASS 条件 | 实际证据 | 判定 | 备注 |
+|--------|-----------|----------|------|------|
+| Gazebo start | Gazebo running | PASS - 正常启动，robots spawn | PASS | - |
+| Fleet coordinator start | coordinator running | PASS - 正常启动并 tick | PASS | - |
+| Nav2 stack start | nav2 bringup without error | FAIL - map argument missing | FAIL | blocker |
+| Goals fired | send_nav2_goal.py success | FAIL - TypeError on timeout kwarg | FAIL | blocker |
+| Robot movement | odom position changes | FAIL - 位置固定 (-4,0) / (4,0) | FAIL | robots 未动 |
+| /speed_limit messages | topic has SpeedLimit data | FAIL - 0 bytes, no data | FAIL | Nav2 未启动 |
+| speed_limit dynamic values | 50/0/100% observed | FAIL - 无数据 | FAIL | - |
+| State transition to YIELDING | YIELDING state logged | FAIL - 仅 CAUTION | FAIL | 无冲突触发 |
+| yield request/ack/resume | /fleet/yield messages | FAIL - 0 bytes, no data | FAIL | - |
+| Collision evidence | collision detected | PASS - 无 | PASS | 场景未运行 |
+| Deadlock evidence | stuck state, no recovery | PARTIAL - robots stuck at CAUTION | PARTIAL | 非 deadlock，仅仅是未运行 |
+| Emergency evidence | EMERGENCY state | PASS - 初始 EMERGENCY 有触发但快速解除 | PASS | 正常 |
+| Robot state publisher | rsp not crashed | FAIL - UnknownROSArgsError | FAIL | URDF 参数错误 |
+
+### 6. Final Verdict
+
+**FAIL**
+
+理由：
+1. Nav2 stack 未启动（map argument missing）
+2. robot_state_publisher 崩溃（URDF 被当作 CLI 参数传递）
+3. Goals 未发出（waitUntilNav2Active API 不兼容）
+4. Robots 未移动 - 全程位置固定
+5. /speed_limit 无任何数据
+6. /fleet/yield 无任何数据
+7. YIELDING/PASSING 状态未触发
+
+fleet_coordinator 本身的 CAUTION 状态转换是正常的，但完整的 Nav2 e2e yield 流程被上述 blocker 阻断。
+
+### 7. Remaining Risks
+
+1. Nav2 map argument - nav2_bringup launch 需要 map 参数，当前脚本未提供
+2. rsp URDF passing - URDF 应通过 xacro 处理后传递，不应作为 raw CLI 参数
+3. waitUntilNav2Active API - Python API 与 nav2_py_tutorial 版本不匹配
+4. fleet_coordinator 单机 CAUTION - 协调器单独可工作，但无法驱动 Nav2 完整栈
+
+### 8. Next Recommendation
+
+P0 blockers to fix before next Nav2 e2e test:
+
+1. Fix send_nav2_goal.py API call:
+   - 移除或修正 waitUntilNav2Active(timeout=600.0) 调用
+   - 检查当前 nav2_py_tutorial / basic_navigator API
+
+2. Fix Nav2 launch to provide map:
+   - 要么提供真实 map yaml
+   - 要么使用 slam 模式（slam:=True）并提供对应参数
+
+3. Fix robot_state_publisher invocation:
+   - 确保 URDF 通过 xacro 预处理后再传给 rsp
+   - 检查脚本中 rsp 的启动命令
+
+4. 重新跑 e2e yield 测试:
+   - fix 后重新执行 run_m3_nav2_e2e_yield.sh
+   - 验证 robots 实际移动、speed_limit 动态值、yield/resume 闭环
