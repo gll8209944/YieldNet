@@ -24,19 +24,21 @@
 
 using namespace std::chrono_literals;
 
-// Behavior Tree XML
+// Behavior Tree XML — AdjustSpeedForFleet is a BT::DecoratorNode and requires exactly one child.
+// Place it before CheckFleetConflict so standalone ticks still publish /speed_limit when the
+// condition returns FAILURE (no conflict); BehaviorTree.CPP builtins such as AlwaysSuccess are
+// registered by BehaviorTreeFactory by default.
 const std::string FLEET_BT_XML = R"(
 <root main_tree_to_execute="FleetCoordination">
   <BehaviorTree ID="FleetCoordination">
     <Sequence name="FleetCoordinationSequence">
+      <AdjustSpeedForFleet default_speed="0.5">
+        <AlwaysSuccess/>
+      </AdjustSpeedForFleet>
       <!-- Check for fleet conflict -->
       <CheckFleetConflict robot_id="{robot_id}"/>
-
       <!-- If conflict, wait for clear -->
       <WaitForYieldClear robot_id="{robot_id}" peer_id="{peer_id}" timeout="15.0"/>
-
-      <!-- Adjust speed based on fleet state -->
-      <AdjustSpeedForFleet default_speed="0.5"/>
     </Sequence>
   </BehaviorTree>
 </root>
@@ -49,11 +51,19 @@ public:
   : Node("fleet_bt_runner")
   {
     this->declare_parameter("robot_id", "robot_a");
+    this->declare_parameter("peer_id", "robot_b");
     this->declare_parameter("bt_xml", FLEET_BT_XML);
 
     robot_id_ = this->get_parameter("robot_id").as_string();
+    std::string peer_id = this->get_parameter("peer_id").as_string();
+    std::string bt_xml = this->get_parameter("bt_xml").as_string();
+    if (bt_xml.empty()) {
+      bt_xml = FLEET_BT_XML;
+    }
 
-    RCLCPP_INFO(this->get_logger(), "FleetBTRunner starting for %s", robot_id_.c_str());
+    RCLCPP_INFO(
+      this->get_logger(), "FleetBTRunner starting for %s (peer_id=%s)", robot_id_.c_str(),
+      peer_id.c_str());
 
     // Create BT factory and register nodes
     factory_ = std::make_unique<BT::BehaviorTreeFactory>();
@@ -63,8 +73,12 @@ public:
     factory_->registerNodeType<fleet_nav2_bt::WaitForYieldClear>("WaitForYieldClear");
     factory_->registerNodeType<fleet_nav2_bt::AdjustSpeedForFleet>("AdjustSpeedForFleet");
 
-    // Create tree
-    tree_ = factory_->createTreeFromText(FLEET_BT_XML);
+    BT::Blackboard::Ptr blackboard = BT::Blackboard::create();
+    blackboard->set("robot_id", robot_id_);
+    blackboard->set("peer_id", peer_id);
+
+    // Create tree ({robot_id}, {peer_id} substituted from blackboard)
+    tree_ = factory_->createTreeFromText(bt_xml, blackboard);
 
     // Create logger
     logger_ = std::make_unique<BT::StdCoutLogger>(tree_);
