@@ -8,6 +8,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "fleet_msgs/msg/yield_command.hpp"
 #include "behaviortree_cpp_v3/action_node.h"
 
 namespace fleet_nav2_bt
@@ -63,17 +64,19 @@ public:
 private:
   /**
    * @brief Send yield command to fleet coordinator
+   * @param command Command type (CMD_REQUEST_YIELD, CMD_ACK_YIELD, CMD_RESUME, CMD_EMERGENCY_STOP)
    */
-  void sendYieldCommand(const std::string & command);
+  void sendYieldCommand(uint8_t command);
 
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr yield_pub_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr resume_sub_;
+  rclcpp::Publisher<fleet_msgs::msg::YieldCommand>::SharedPtr yield_pub_;
+  rclcpp::Subscription<fleet_msgs::msg::YieldCommand>::SharedPtr yield_sub_;
 
   std::string robot_id_;
   std::string peer_id_;
   bool resume_received_;
+  bool yield_ack_received_;
   rclcpp::Time yield_start_time_;
   double timeout_;
   bool first_tick_;

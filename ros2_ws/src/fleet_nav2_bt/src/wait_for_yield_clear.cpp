@@ -6,11 +6,17 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
-#include "std_msgs/msg/string.hpp"
-#include "behaviortree_cpp_v3/behavior_tree.h"
+#include "fleet_msgs/msg/yield_command.hpp"
+#include "behaviortree_cpp_v3/action_node.h"
 
 namespace fleet_nav2_bt
 {
+
+// YieldCommand command types (must match fleet_coordinator.py)
+const uint8_t CMD_REQUEST_YIELD = 0;
+const uint8_t CMD_ACK_YIELD = 1;
+const uint8_t CMD_RESUME = 2;
+const uint8_t CMD_EMERGENCY_STOP = 3;
 
 WaitForYieldClear::WaitForYieldClear(
   const std::string & action_name,
@@ -18,27 +24,38 @@ WaitForYieldClear::WaitForYieldClear(
 : BT::ActionNodeBase(action_name, conf),
   node_(rclcpp::Node::make_shared("wait_for_yield_clear")),
   resume_received_(false),
+  yield_ack_received_(false),
   timeout_(15.0),
   first_tick_(true)
 {
   // Publisher for cmd_vel to stop the robot
+  // Note: This is a safety fallback. Production path should use Nav2 controller.
   cmd_vel_pub_ = node_->create_publisher<geometry_msgs::msg::Twist>(
     "cmd_vel",
     rclcpp::QoS(rclcpp::KeepLast(1)).reliable());
 
-  // Publisher for yield commands
-  yield_pub_ = node_->create_publisher<std_msgs::msg::String>(
-    "fleet/yield_command",
+  // Publisher for yield commands using fleet_msgs/YieldCommand
+  // Topic: /fleet/yield (correct production path per SAD §4)
+  yield_pub_ = node_->create_publisher<fleet_msgs::msg::YieldCommand>(
+    "/fleet/yield",
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
 
-  // Subscription for RESUME command
-  resume_sub_ = node_->create_subscription<std_msgs::msg::String>(
-    "fleet/yield_command",
+  // Subscription for yield commands - listen to /fleet/yield
+  // This allows receiving RESUME and ACK_YIELD from peers
+  yield_sub_ = node_->create_subscription<fleet_msgs::msg::YieldCommand>(
+    "/fleet/yield",
     rclcpp::QoS(rclcpp::KeepLast(10)).reliable(),
-    [this](const std_msgs::msg::String::SharedPtr msg) {
-      if (msg->data.find("RESUME") != std::string::npos) {
+    [this](const fleet_msgs::msg::YieldCommand::SharedPtr msg) {
+      // Only process if this command is for this robot
+      if (msg->to_robot != robot_id_) {
+        return;
+      }
+
+      // Check for RESUME or ACK_YIELD
+      if (msg->command == CMD_RESUME || msg->command == CMD_ACK_YIELD) {
         resume_received_ = true;
-        RCLCPP_INFO(node_->get_logger(), "RESUME received, stopping yield wait");
+        RCLCPP_INFO(node_->get_logger(), "RESUME/ACK_YIELD received from %s, clearing yield wait",
+          msg->from_robot.c_str());
       }
     });
 
@@ -62,10 +79,11 @@ BT::NodeStatus WaitForYieldClear::tick()
 
     // Reset state
     resume_received_ = false;
+    yield_ack_received_ = false;
     yield_start_time_ = node_->now();
 
-    // Send ACK_YIELD command
-    sendYieldCommand("ACK_YIELD");
+    // Send ACK_YIELD command to notify peer we're yielding
+    sendYieldCommand(CMD_ACK_YIELD);
 
     // Publish zero velocity to stop robot
     geometry_msgs::msg::Twist cmd;
@@ -79,10 +97,10 @@ BT::NodeStatus WaitForYieldClear::tick()
     return BT::NodeStatus::RUNNING;
   }
 
-  // Check for RESUME
+  // Check for RESUME (from peer who we yielded to)
   if (resume_received_) {
     first_tick_ = true;
-    sendYieldCommand("RESUME");
+    sendYieldCommand(CMD_RESUME);
     RCLCPP_INFO(node_->get_logger(), "Yield cleared, resuming");
     return BT::NodeStatus::SUCCESS;
   }
@@ -92,10 +110,12 @@ BT::NodeStatus WaitForYieldClear::tick()
   if (elapsed >= timeout_) {
     first_tick_ = true;
     RCLCPP_WARN(node_->get_logger(), "Yield timeout after %.1fs", elapsed);
+    // Force resume
+    sendYieldCommand(CMD_RESUME);
     return BT::NodeStatus::FAILURE;
   }
 
-  // Keep publishing zero velocity
+  // Keep publishing zero velocity as safety fallback
   geometry_msgs::msg::Twist cmd;
   cmd.linear.x = 0.0;
   cmd.angular.z = 0.0;
@@ -107,17 +127,22 @@ BT::NodeStatus WaitForYieldClear::tick()
 void WaitForYieldClear::halt()
 {
   first_tick_ = true;
-  sendYieldCommand("RESUME");
-  RCLCPP_INFO(node_->get_logger(), "Yield halted");
+  // Send RESUME when halted
+  sendYieldCommand(CMD_RESUME);
+  RCLCPP_INFO(node_->get_logger(), "Yield halted, sent RESUME");
 }
 
-void WaitForYieldClear::sendYieldCommand(const std::string & command)
+void WaitForYieldClear::sendYieldCommand(uint8_t command)
 {
-  std_msgs::msg::String msg;
-  msg.data = command + ":" + robot_id_ + ":" + peer_id_;
+  fleet_msgs::msg::YieldCommand msg;
+  msg.from_robot = robot_id_;
+  msg.to_robot = peer_id_;
+  msg.command = command;
+  // Note: conflict_x/y and stamp are optional for ACK_YIELD/RESUME
+
   yield_pub_->publish(msg);
-  RCLCPP_INFO(node_->get_logger(), "Sending yield command: %s from %s to %s",
-    command.c_str(), robot_id_.c_str(), peer_id_.c_str());
+  RCLCPP_INFO(node_->get_logger(), "Sending yield command: cmd=%d from=%s to=%s",
+    command, robot_id_.c_str(), peer_id_.c_str());
 }
 
 }  // namespace fleet_nav2_bt

@@ -13,6 +13,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(nav2_msgs REQUIRED)
+find_package(fleet_msgs REQUIRED)
 
 # Include directories
 include_directories(
@@ -39,6 +40,8 @@ ament_target_dependencies(wait_for_yield_clear
   geometry_msgs
   std_msgs
   behaviortree_cpp_v3
+
+  fleet_msgs
 )
 
 add_library(adjust_speed_for_fleet SHARED
@@ -49,6 +52,7 @@ ament_target_dependencies(adjust_speed_for_fleet
   geometry_msgs
   std_msgs
   behaviortree_cpp_v3
+  nav2_msgs
 )
 
 # Build standalone BT runner executable
