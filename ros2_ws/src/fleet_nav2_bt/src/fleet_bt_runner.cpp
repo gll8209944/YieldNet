@@ -44,7 +44,7 @@ const std::string FLEET_BT_XML = R"(
 </root>
 )";
 
-class FleetBTRunner : public rclcpp::Node, public std::enable_shared_from_this<FleetBTRunner>
+class FleetBTRunner : public rclcpp::Node
 {
 public:
   FleetBTRunner()
@@ -74,13 +74,14 @@ public:
     factory_->registerNodeType<fleet_nav2_bt::AdjustSpeedForFleet>("AdjustSpeedForFleet");
   }
 
-  /** Call immediately after std::make_shared<FleetBTRunner>() so blackboard can use shared_from_this(). */
-  void finish_construction()
+  /** Called from main after std::make_shared so blackboard receives the spun rclcpp::Node handle. */
+  void finish_construction(const std::shared_ptr<FleetBTRunner>& self_as_node)
   {
     BT::Blackboard::Ptr blackboard = BT::Blackboard::create();
     blackboard->set("robot_id", robot_id_);
     blackboard->set("peer_id", peer_id_);
-    blackboard->set<rclcpp::Node::SharedPtr>("node", shared_from_this());
+    blackboard->set<rclcpp::Node::SharedPtr>(
+      "node", std::static_pointer_cast<rclcpp::Node>(self_as_node));
 
     tree_ = factory_->createTreeFromText(bt_xml_, blackboard);
 
@@ -120,7 +121,7 @@ int main(int argc, char ** argv)
   rclcpp::init(argc, argv);
 
   auto node = std::make_shared<FleetBTRunner>();
-  node->finish_construction();
+  node->finish_construction(node);
 
   RCLCPP_INFO(node->get_logger(), "Spinning fleet_bt_runner...");
   rclcpp::spin(node);
