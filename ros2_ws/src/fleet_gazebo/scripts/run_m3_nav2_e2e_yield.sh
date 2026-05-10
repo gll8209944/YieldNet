@@ -74,6 +74,7 @@ if [ ! -f "${PKG_SHARE}/scripts/move_robots_corridor_two.py" ]; then
 fi
 MOVE_PY="${PKG_SHARE}/scripts/move_robots_corridor_two.py"
 SEND_GOAL_PY="${PKG_SHARE}/scripts/send_nav2_goal.py"
+C2O_PY="${ROS2_WS}/src/fleet_coordination/fleet_coordination/cmd_vel_to_odom.py"
 
 cleanup() {
   echo "[CLEANUP] Stopping scenario processes..."
@@ -83,6 +84,7 @@ cleanup() {
   pkill -f "mock_path_publisher" 2>/dev/null || true
   pkill -f "robot_mover_corridor_two" 2>/dev/null || true
   pkill -f "nav2_container" 2>/dev/null || true
+  pkill -f "cmd_vel_to_odom" 2>/dev/null || true
   screen -S nav2_ra -X quit 2>/dev/null || true
   screen -S nav2_rb -X quit 2>/dev/null || true
   screen -S goal_a -X quit 2>/dev/null || true
@@ -191,7 +193,22 @@ screen -dmS mock_path bash -c "
 sleep 2
 
 if [ "$WITH_NAV2" = "1" ]; then
-  echo "[7] Nav2 bringup (SLAM) x2 — params $LOG_DIR/nav2_fleet_merged.yaml"
+  # Start cmd_vel_to_odom BEFORE Nav2 so odom->base_footprint TF is available
+  # when Nav2 controller_server starts. This is a Gazebo/namespace workaround.
+  echo "[6b] cmd_vel_to_odom (odom TF workaround for Gazebo)"
+  CMD_VEL_TO_ODOM="${ROS2_WS}/install/fleet_coordination/lib/fleet_coordination/cmd_vel_to_odom"
+  for robot in robot_a robot_b; do
+    screen -dmS c2o_${robot} bash -c "
+      source /opt/ros/humble/setup.bash
+      source ${ROS2_WS}/install/setup.bash
+      export ROS_DOMAIN_ID=0
+      python3 ${C2O_PY} ${robot} 2>&1 | tee $LOG_DIR/cmd_vel_to_odom_${robot}.log
+      exec bash"
+    sleep 0.5
+  done
+  sleep 1
+
+  echo "[7] Nav2 bringup (AMCL) x2 — params $LOG_DIR/nav2_fleet_merged.yaml"
   screen -dmS nav2_ra bash -c "
     source /opt/ros/humble/setup.bash
     source ${ROS2_WS}/install/setup.bash

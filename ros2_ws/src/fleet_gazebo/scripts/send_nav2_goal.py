@@ -37,14 +37,11 @@ def main() -> None:
     pose.pose.orientation.z = sy
     pose.pose.orientation.w = cy
 
-    # waitUntilNav2Active(self, navigator, localizer) has NO timeout parameter.
-    # Nav2 may not be fully active when goals are sent (amcl_pose not yet published
-    # for initial pose), so we just log and continue - goal will fail gracefully.
-    try:
-        nav.waitUntilNav2Active()
-    except Exception as e:
-        nav.get_logger().warn(f'Nav2 may not be fully active: {e}')
-
+    # NOTE: waitUntilNav2Active() can block indefinitely when Nav2 is running but
+    # BT navigator state is not "active" (e.g. no initial pose, no odom TF).
+    # For smoke tests we skip it and send the goal directly - failures are
+    # expected and logged.
+    nav.get_logger().info('Sending NavigateToPose goal directly (skipping waitUntilNav2Active)')
     nav.goToPose(pose)
     start = time.time()
     while not nav.isNav2Complete():
