@@ -76,8 +76,19 @@ MOVE_PY="${PKG_SHARE}/scripts/move_robots_corridor_two.py"
 SEND_GOAL_PY="${PKG_SHARE}/scripts/send_nav2_goal.py"
 C2O_PY="${ROS2_WS}/src/fleet_coordination/fleet_coordination/cmd_vel_to_odom.py"
 
+cleanup_screens() {
+  screen -ls 2>/dev/null | awk '
+    match($1, /\.(gaz|mover|mock_path|nav2_ra|nav2_rb|goal_a|goal_b|rsp_robot_a|rsp_robot_b|coord_robot_a|coord_robot_b|c2o_robot_a|c2o_robot_b|eco_yield|eco_status_robot_a|eco_status_robot_b|eco_sl_robot_a|eco_sl_robot_b)$/) {
+      print $1
+    }' | while read -r session; do
+      [ -n "$session" ] || continue
+      screen -S "$session" -X quit 2>/dev/null || true
+    done
+}
+
 cleanup() {
   echo "[CLEANUP] Stopping scenario processes..."
+  cleanup_screens
   pkill -f "gzserver" 2>/dev/null || true
   pkill -f "fleet_coordinator" 2>/dev/null || true
   pkill -f "robot_state_publisher" 2>/dev/null || true
@@ -85,14 +96,16 @@ cleanup() {
   pkill -f "robot_mover_corridor_two" 2>/dev/null || true
   pkill -f "nav2_container" 2>/dev/null || true
   pkill -f "cmd_vel_to_odom" 2>/dev/null || true
-  screen -S nav2_ra -X quit 2>/dev/null || true
-  screen -S nav2_rb -X quit 2>/dev/null || true
-  screen -S goal_a -X quit 2>/dev/null || true
-  screen -S goal_b -X quit 2>/dev/null || true
+  pkill -f "send_nav2_goal.py" 2>/dev/null || true
+  cleanup_screens
   screen -wipe 2>/dev/null || true
 }
 
 trap cleanup EXIT
+
+echo "[PRE-CLEANUP] Removing stale scenario processes before start"
+cleanup
+sleep 2
 
 echo "LOG_DIR=$LOG_DIR"
 echo "WITH_NAV2=$WITH_NAV2 WITH_GOALS=$WITH_GOALS DURATION=$DURATION"
@@ -159,6 +172,8 @@ for ns in robot_a robot_b; do
     source ${ROS2_WS}/install/setup.bash
     export ROS_DOMAIN_ID=0
     ros2 run robot_state_publisher robot_state_publisher --ros-args \
+      -r /tf:=/${ns}/tf \
+      -r /tf_static:=/${ns}/tf_static \
       --params-file ${LOG_DIR}/rsp_${ns}.yaml \
       2>&1 | tee $LOG_DIR/rsp_${ns}.log
     exec bash"
@@ -203,7 +218,10 @@ if [ "$WITH_NAV2" = "1" ]; then
       source /opt/ros/humble/setup.bash
       source ${ROS2_WS}/install/setup.bash
       export ROS_DOMAIN_ID=0
-      python3 ${C2O_PY} ${robot} 2>&1 | tee $LOG_DIR/cmd_vel_to_odom_${robot}.log
+      python3 ${C2O_PY} ${robot} --ros-args \
+        -r /tf:=/${robot}/tf \
+        -r /tf_static:=/${robot}/tf_static \
+        2>&1 | tee $LOG_DIR/cmd_vel_to_odom_${robot}.log
       exec bash"
     sleep 0.5
   done
@@ -261,14 +279,18 @@ if [ "$WITH_NAV2" = "1" ] && [ "$WITH_GOALS" = "1" ]; then
     source ${ROS2_WS}/install/setup.bash
     export ROS_DOMAIN_ID=0
     sleep 40
-    python3 ${SEND_GOAL_PY} robot_a 0.0 0.0 0.0 2>&1 | tee $LOG_DIR/goal_robot_a.log || true
+    python3 ${SEND_GOAL_PY} robot_a 0.0 0.0 0.0 \
+      --initial-x -4.0 --initial-y 0.0 --initial-yaw 0.0 \
+      2>&1 | tee $LOG_DIR/goal_robot_a.log || true
     exec bash"
   screen -dmS goal_b bash -c "
     source /opt/ros/humble/setup.bash
     source ${ROS2_WS}/install/setup.bash
     export ROS_DOMAIN_ID=0
     sleep 42
-    python3 ${SEND_GOAL_PY} robot_b 0.0 0.0 3.14159 2>&1 | tee $LOG_DIR/goal_robot_b.log || true
+    python3 ${SEND_GOAL_PY} robot_b 0.0 0.0 3.14159 \
+      --initial-x 4.0 --initial-y 0.0 --initial-yaw 3.14159 \
+      2>&1 | tee $LOG_DIR/goal_robot_b.log || true
     exec bash"
 fi
 

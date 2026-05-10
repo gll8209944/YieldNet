@@ -777,3 +777,150 @@ bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 90
 1. 在场景运行中增加 **live TF audit**，直接验证 `/tf` 中是否真的存在 `robot_a/odom -> robot_a/base_footprint` 与 `robot_a/base_footprint -> robot_a/base_link`。
 2. 单独验证 `cmd_vel_to_odom.py` 发往哪个 TF topic，以及 Nav2 是否真的在消费同一条 `/tf`。
 3. 将 collector 从 `ros2 topic echo` 改为受控 Python subscriber，避免 `!rclpy.ok()` 污染判定。
+
+---
+
+## Scenario: Nav2 lifecycle wait fix rerun
+
+**日期**: 2026-05-10
+
+### run command
+
+```bash
+cd /home/guolinlin/ros2_ws/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+colcon build --symlink-install --packages-select fleet_gazebo
+bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 90
+```
+
+### log directory
+
+- `LOG_DIR=/tmp/fleet_test_nav2_e2e_yield_20260510_114106`
+- 外层 SSH 返回 `exit_code=255`，但远端场景主体已执行到 `[10] Topic collectors (90s)`，关键日志已完整落盘。
+
+### modified files
+
+| 路径 | 说明 |
+|------|------|
+| `ros2_ws/src/fleet_gazebo/scripts/send_nav2_goal.py` | 先等待 `amcl_pose`，循环发布 `initialpose`，再 `waitUntilNav2Active(localizer='amcl')`，最后 `goToPose()` |
+| `ros2_ws/src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh` | goal 脚本传入每台机器人 spawn 初始位姿；增强启动前/退出后场景清理，避免 `Entity already exists` |
+
+### send_nav2_goal.py lifecycle fix
+
+- `goal_robot_a.log`:
+  - `AMCL pose available; waiting for Nav2 lifecycle to become active`
+  - `Nav2 is ready for use!`
+  - `Navigating to goal: 0.0 0.0...`
+- `goal_robot_b.log`:
+  - `AMCL pose available; waiting for Nav2 lifecycle to become active`
+  - `Nav2 is ready for use!`
+  - `Navigating to goal: 0.0 0.0...`
+
+**判定**: lifecycle 修复有效。相比上一轮的 `Goal ... was rejected`，本轮两台机器人都先等到 `amcl_pose`，再等到 Nav2 active，随后成功进入导航请求。
+
+### build result
+
+- 远端执行 `colcon build --symlink-install --packages-select fleet_gazebo`
+- 结果：`Finished <<< fleet_gazebo [6.64s]`
+- **判定**: PASS
+
+### test result
+
+- 本轮**未执行** `colcon test`
+- 原因：本任务聚焦单脚本同步 + 90s Nav2 e2e rerun；远端会话稳定性较差，优先保证最新场景复验与日志取证
+
+### amcl_pose evidence
+
+- `goal_robot_a.log`: `Published initial pose to /robot_a/initialpose` 后收到 `AMCL pose available`
+- `goal_robot_b.log`: `Published initial pose to /robot_b/initialpose` 后收到 `AMCL pose available`
+- `nav2_robot_a.log`: `initialPoseReceived`
+- `nav2_robot_b.log`: `initialPoseReceived`
+
+**判定**: PASS - `TF + RSP + initialpose + AMCL` 链路已跑通。
+
+### bt_navigator active evidence
+
+- `goal_robot_a.log`: `Nav2 is ready for use!`
+- `goal_robot_b.log`: `Nav2 is ready for use!`
+- `nav2_robot_a.log`: `Activating bt_navigator` / `Server bt_navigator connected with bond`
+- `nav2_robot_b.log`: `Activating bt_navigator` / `Server bt_navigator connected with bond`
+
+**判定**: PASS - `bt_navigator` 已进入 active。
+
+### goal accepted / rejected evidence
+
+- 未再出现上一轮的 `Goal to 0.0 0.0 was rejected!`
+- `nav2_robot_a.log`: `Begin navigating from current location (-3.92, -0.01) to (0.00, 0.00)`
+- `nav2_robot_b.log`: `Begin navigating from current location (3.92, -0.01) to (0.00, 0.00)`
+- 随后：
+  - `GridBased: failed to create plan with tolerance 0.50.`
+  - `Planning algorithm GridBased failed to generate a valid path to (0.00, 0.00)`
+  - `[navigate_to_pose] [ActionServer] Aborting handle.`
+  - `Goal failed`
+
+**判定**: PARTIAL - goal 不再在 lifecycle 阶段被直接 reject，而是在 planner 阶段失败。
+
+### robot movement evidence
+
+- `mock_path.log` 在场景后段仍持续记录：
+  - `robot_a: x=-4.00, y=-0.00`
+  - `robot_b: x=4.00, y=0.00`
+- `coord_robot_a.log` / `coord_robot_b.log` 的 `own_pos` 在整轮中保持初始位置
+
+**判定**: FAIL - 机器人未产生可观察位移。
+
+### /speed_limit evidence
+
+- `speed_robot_a.log` / `speed_robot_b.log` 仍被 `ros2 topic echo` 的 `xmlrpc.client.Fault: !rclpy.ok()` 干扰
+- 本轮日志中未抓到可作为判定依据的 `SpeedLimit` 消息
+
+**判定**: FAIL - 本轮无法证明 `/speed_limit` 动态发布。
+
+### state transition evidence
+
+- `coord_robot_a.log`: `STATE_CHANGE: robot_a NORMAL -> CAUTION (speed_ratio=0.50)`
+- `coord_robot_b.log`: `STATE_CHANGE: robot_b NORMAL -> CAUTION (speed_ratio=0.50)`
+- 之后无 `YIELDING` / `PASSING` / `NORMAL` 恢复链路
+
+**判定**: PARTIAL - 仅验证到初始 `CAUTION`，未进入 yield/resume 闭环。
+
+### yield / resume evidence
+
+- `yield.log` 仍被 `ros2 topic echo` 的 daemon 故障打断
+- `coord_*.log` / `nav2_robot_*.log` 未见 `REQUEST_YIELD` / `ACK_YIELD` / `RESUME`
+
+**判定**: FAIL - 本轮没有 yield/resume 证据。
+
+### Nav2 / Gazebo errors
+
+| 组件 | 证据 | 影响 |
+|------|------|------|
+| `planner_server` | `failed to create plan with tolerance 0.50` | goal 在规划阶段 abort |
+| `global_costmap` | 长时间 `Timed out waiting for transform from robot_*/base_link to map` | map 链路建立较慢，规划启动滞后 |
+| `amcl` | `Failed to transform initial pose in time ... extrapolation into the future` | 初始位姿注入后仍有时间戳/缓存边缘问题 |
+| topic collectors | `xmlrpc.client.Fault: !rclpy.ok()` | `/speed_limit`、`/fleet/yield`、`status_*` 证据链不可靠 |
+| Gazebo | `Can't open display` | 仅 headless 渲染警告，不构成场景 blocker |
+
+### final verdict
+
+**FAIL**
+
+理由：
+
+1. `send_nav2_goal.py` lifecycle 修复已生效，`amcl_pose` 与 `bt_navigator active` 已验证通过。
+2. 但两台机器人都在 planner 阶段 `failed to create plan`，goal 被 abort。
+3. `mock_path.log` 与 `coord_*.log` 显示机器人仍未移动。
+4. `/speed_limit`、`/fleet/yield` 仍无可用证据，yield/resume 闭环未达成。
+
+### remaining risks
+
+1. `planner_server` 到 `(0,0)` 的路径规划失败，可能与 map / costmap / corridor 中心点可达性有关。
+2. `map` 相关 TF 在激活前阶段仍存在长时间 unavailable / extrapolation 抖动。
+3. `ros2 topic echo` 采集器仍不可靠，继续阻碍 `/speed_limit` 与 `/fleet/yield` 判定。
+
+### next recommendation
+
+1. 将目标点从 `(0,0)` 改为地图中明确可达的 corridor 通道点，先验证 `goal accepted -> plan created -> robot starts moving`。
+2. 把 collector 从 `ros2 topic echo` 全部替换为受控 Python subscriber，避免 `!rclpy.ok()` 干扰。
+3. 单独对 `planner_server` 做一次 `ComputePathToPose` 最小复现，确认是 map 可达性问题还是 costmap / TF 时间戳问题。
