@@ -158,6 +158,8 @@ CheckFleetConflict::~CheckFleetConflict()
 
 BT::NodeStatus CheckFleetConflict::tick()
 {
+  rclcpp::spin_some(node_);
+
   // Check if fleet state has been received
   if (!state_received_) {
     // No fleet state yet - return failure (no conflict)

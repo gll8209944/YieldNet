@@ -1118,3 +1118,143 @@ bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 90
 1. 新增一个最小 BT runtime 对照：使用同一 `ComputePathToPose -> FollowPath` 默认 Nav2 XML 验证 `FollowPath` 是否能收到非空 path。
 2. 如果默认 XML 可移动，则继续缩小 `navigate_with_fleet.xml`：先保留 `FollowPath` 原样，再逐步加入 `CheckFleetConflict`、`WaitForYieldClear`、`AdjustSpeedForFleet`。
 3. 修复 `/speed_limit` 证据链：让 `AdjustSpeedForFleet` 首次 tick 发布当前 speed limit，并确认订阅到 `/robot_*/fleet/coordinator_status`。
+
+---
+
+## Scenario: Nav2 default FollowPath and blackboard fix
+
+**日期**: 2026-05-10
+
+### root cause
+
+本轮对照确认，上一轮的 `FollowPath` 空 path / controller failed 不是 Fleet 自定义节点直接覆盖 `{path}`：
+
+- 手写极简 XML（仅 `PipelineSequence: ComputePathToPose -> FollowPath`）仍复现 `Resulting plan has 0 poses`，两台 goal 均失败。
+- Nav2 Humble 标准默认树结构（`RateController + RecoveryNode + ComputePathToPose -> FollowPath`）在同一 corridor map、同一起点、同一 reachable goals 下可让两台 goal 成功。
+- 因此核心问题是 Fleet XML 偏离 Nav2 默认 replanning/recovery 结构，导致 controller 面对瞬时空 path / local costmap 抖动时没有默认恢复语义。
+- `/speed_limit` 为空的次级原因是 Fleet BT 插件订阅回调没有在 tick 中处理；改为按机器人 namespace 创建插件专用 ROS node，并在 tick 中 `rclcpp::spin_some()` 后，插件可读取 `coordinator_status` 并发布 SpeedLimit。
+
+### modified files
+
+| 路径 | 说明 |
+|------|------|
+| `ros2_ws/src/fleet_nav2_bt/behavior_trees/navigate_default_follow_path.xml` | 新增 Nav2 标准默认对照树（无 Fleet 节点） |
+| `ros2_ws/src/fleet_nav2_bt/behavior_trees/navigate_goal_updated_follow_path.xml` | 新增 `GoalUpdatedController` 对照树 |
+| `ros2_ws/src/fleet_nav2_bt/behavior_trees/navigate_with_conflict_check.xml` | 新增 `CheckFleetConflict` 对照树 |
+| `ros2_ws/src/fleet_nav2_bt/behavior_trees/navigate_with_speed.xml` | 新增 `AdjustSpeedForFleet` 对照树 |
+| `ros2_ws/src/fleet_nav2_bt/behavior_trees/navigate_with_fleet.xml` | 对齐 Nav2 默认 replanning/recovery 结构，并将 Fleet 节点放在 controller 侧 |
+| `ros2_ws/src/fleet_nav2_bt/include/fleet_nav2_bt/bt_ros_host_utils.hpp` | Fleet BT 插件使用同 namespace 专用 ROS node |
+| `ros2_ws/src/fleet_nav2_bt/src/{check_fleet_conflict,adjust_speed_for_fleet,wait_for_yield_clear}.cpp` | tick 内 `spin_some()`，处理订阅回调 |
+| `ros2_ws/src/fleet_gazebo/fleet_gazebo/merge_nav2_fleet_params.py` | 支持 `BT_XML_MODE` / `NAV2_BT_XML` 选择 BT XML |
+| `ros2_ws/src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh` | 输出 BT 模式，增加 `PATH_PROBE_TIMEOUT`，避免 probe 阻塞 e2e |
+
+### default BT XML result
+
+| XML / mode | LOG_DIR | result |
+|------------|---------|--------|
+| 手写极简 `ComputePathToPose -> FollowPath` | `/tmp/fleet_test_nav2_e2e_yield_20260510_171104` | FAIL：probe PASS，但 runtime 仍 `Resulting plan has 0 poses`，两台 `TaskResult.FAILED` |
+| Nav2 标准默认树 `BT_XML_MODE=default` | `/tmp/fleet_test_nav2_e2e_yield_20260510_171703` | PASS：两台 `NavigateToPose result: TaskResult.SUCCEEDED`，机器人稳定移动 |
+
+### incremental Fleet BT A/B result
+
+本轮新增了 `default`、`goal_updated`、`conflict`、`speed`、`fleet` 五种 XML mode。实际执行了关键 A/B：
+
+| mode | path / controller | movement | SpeedLimit | yield |
+|------|-------------------|----------|------------|-------|
+| `default` | transient zero-length plan 可被 Nav2 默认 recovery/replanning 消化 | PASS，两台 goal 成功 | N/A | N/A |
+| `fleet`（修复后） | 仍有 local costmap / DWB transient warnings，但 `robot_a` goal 成功 | PARTIAL，`robot_a` 成功，`robot_b` 90s 内未写出最终结果 | PASS，50/100 动态值可观测 | FAIL，本轮 `yield.log` 为空 |
+
+### blackboard path analysis
+
+- `ComputePathToPose` 输出仍为 `path="{path}"`。
+- `FollowPath` 输入仍为 `path="{path}"`。
+- 修复没有更改 blackboard key 名；真正修复点是保留 Nav2 默认 `RateController`、planner/controller `RecoveryNode`、context costmap clear 与 top-level recovery。
+- `CheckFleetConflict` 输出端口已显式绑定 `conflict_peer="{conflict_peer}"`，避免 `WaitForYieldClear` 无法读取 peer。
+- `AdjustSpeedForFleet` 只包裹 `FollowPath`，不再包裹 `ComputePathToPose`，避免影响 path 计算阶段。
+
+### build / test result
+
+远端独立测试目录执行：
+
+```bash
+cd /home/guolinlin/ros2_ws/s3_m3_default_bt_worktree/YieldNet/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+colcon test
+colcon test-result --verbose
+```
+
+结果：
+
+- `colcon build`: PASS，`Summary: 4 packages finished`
+- `colcon test`: PASS，`Summary: 4 packages finished`
+- `colcon test-result --verbose`: PASS，`32 tests, 0 errors, 0 failures, 0 skipped`
+
+### run command
+
+```bash
+cd /home/guolinlin/ros2_ws/s3_m3_default_bt_worktree/YieldNet/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+BT_XML_MODE=default bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 90
+BT_XML_MODE=fleet bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 90
+```
+
+### LOG_DIR
+
+- default 标准树：`/tmp/fleet_test_nav2_e2e_yield_20260510_171703`
+- full fleet 最新轮：`/tmp/fleet_test_nav2_e2e_yield_20260510_173145`
+- runner exit code: `0`
+
+### evidence summary
+
+| 检查项 | PASS 条件 | 实际证据 | 判定 | 备注 |
+|--------|-----------|----------|------|------|
+| default BT XML movement smoke | 默认 Nav2 可移动并完成 goal | 两台 `TaskResult.SUCCEEDED` | PASS | 证明地图/goal/planner 可用 |
+| blackboard path key | Compute 与 Follow 使用同一 key | 均为 `{path}` | PASS | 未改 key 名 |
+| AMCL pose | 收到 `/{ns}/amcl_pose` | `AMCL pose available` | PASS | 两机均有 |
+| bt_navigator active | Nav2 ready | `Nav2 is ready for use!` | PASS | 两机均有 |
+| goal accepted | 未被 reject | `Navigating to goal`，未见 reject | PASS | - |
+| planner path created | probe 非空 path | 6 组 probe 全 PASS，118/119/198/199 poses | PASS | corridor map 有效 |
+| controller path consumed | full fleet goal 至少成功 | `robot_a` full fleet `TaskResult.SUCCEEDED` | PARTIAL | `robot_b` 未在 90s 内写结果 |
+| robot movement | odom 有明显变化 | full fleet: `robot_a` x min/max `-4.0/7.09`，`robot_b` `2.88/6.39` | PASS | 仍有仿真 odom 抖动风险 |
+| collector reliability | Python collector 写出 topic 数据 | status/speed 有数据，无 `!rclpy.ok()` | PASS | `collector.log` 空但输出文件有效 |
+| `/speed_limit` messages | 有 SpeedLimit 消息 | `speed_robot_a.log` / `speed_robot_b.log` 有 50/100 | PASS | 动态值已观测 |
+| state transition | 有 Fleet 状态变化 | CAUTION/AWARENESS 多次切换 | PARTIAL | full fleet 未稳定 PASSING |
+| yield request / ack / resume | `/fleet/yield` 有 request/ack/resume | latest full fleet `yield.log` 为空 | FAIL | 旧一轮有 request，但非最终轮 |
+| collision | 有碰撞计数或明确无碰撞证据 | 无碰撞计数器 | FAIL | 不宣称 0 collision |
+| deadlock | 有 0 deadlock 证据 | 无完整判据 | FAIL | 不宣称 0 deadlock |
+| emergency | 0 unrecovered emergency | 初始 EMERGENCY 可恢复，后续无完整统计 | PARTIAL | 需专门统计 |
+
+### Nav2 / Gazebo error summary
+
+- 默认标准树和 full fleet 中仍可见短时 `Resulting plan has 0 poses`、`No valid trajectories`、`PathDist/Trajectory Hits Unreachable Area`。
+- 默认标准树能通过 Nav2 replanning/recovery 语义恢复并成功到达。
+- full fleet 中 `CheckFleetConflict` 与 `AdjustSpeedForFleet` 已能读取 coordinator JSON，但状态多在 CAUTION/AWARENESS 间抖动。
+- `cmd_vel_to_odom.py` 仍仅作为 Gazebo / namespace e2e smoke workaround，不作为生产 odom 来源。
+
+### final verdict
+
+**PARTIAL PASS**
+
+理由：
+
+1. default Nav2 标准树对照已证明 corridor map、reachable goals、planner、controller 基本闭环可用。
+2. full fleet 模式已消除“插件完全收不到 coordinator_status”的问题，并已观测到动态 `/speed_limit`。
+3. full fleet 最新轮 `robot_a` goal 成功，但 `robot_b` 未在 90s 内写出最终结果。
+4. 最新 full fleet 没有 `/fleet/yield` request/ack/resume 证据，且缺少 collision/deadlock/emergency 完整统计。
+
+### remaining risks
+
+1. full fleet 中仍有 DWB / local costmap transient errors，说明局部代价地图与仿真 odom 仍需稳定化。
+2. Fleet 状态在 CAUTION/AWARENESS 间高频抖动，可能影响 yield 触发稳定性。
+3. `yield.log` 为空，M3 完整 yield/resume 验收仍未闭环。
+4. 仍未内置碰撞计数器、deadlock 计数器与 unrecovered emergency 判据。
+
+### next recommendation
+
+1. 基于当前 Nav2 标准树结构继续调稳定性：缩小 DWB/local costmap out-of-plan 问题。
+2. 增加 collision/deadlock/emergency 自动判定器，避免人工推断。
+3. 针对 Fleet 状态抖动单独调参或加入状态滞回，再重跑 90s / 180s full fleet yield。

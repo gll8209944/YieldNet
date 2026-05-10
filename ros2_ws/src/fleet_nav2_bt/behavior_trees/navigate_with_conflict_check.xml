@@ -1,0 +1,16 @@
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <PipelineSequence>
+      <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+      <ReactiveSequence name="ConflictCheckedFollow">
+        <ReactiveFallback name="ObserveFleetConflict">
+          <Inverter>
+            <CheckFleetConflict robot_id="{robot_id}" conflict_peer="{conflict_peer}"/>
+          </Inverter>
+          <AlwaysSuccess/>
+        </ReactiveFallback>
+        <FollowPath path="{path}" controller_id="FollowPath"/>
+      </ReactiveSequence>
+    </PipelineSequence>
+  </BehaviorTree>
+</root>

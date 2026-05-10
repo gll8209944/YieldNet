@@ -7,6 +7,9 @@
 # Env:
 #   WITH_NAV2  - 1: launch dual nav2 bringup + fleet BT YAML merge (default 1)
 #   WITH_GOALS - 1: send NavigateToPose goals (default 1). Recommended when WITH_NAV2=1 so cmd_vel stays with Nav2.
+#   BT_XML_MODE - fleet | default | goal_updated | conflict | speed (default: fleet)
+#   NAV2_BT_XML - absolute BT XML override, takes precedence over BT_XML_MODE.
+#   PATH_PROBE_TIMEOUT - per-robot ComputePathToPose probe timeout in seconds (default 45)
 #
 # Fleet-only motion (no Nav2):
 #   WITH_NAV2=0 bash run_m3_nav2_e2e_yield.sh
@@ -30,6 +33,8 @@ LOG_DIR=/tmp/fleet_test_nav2_e2e_yield_${TIMESTAMP}
 WITH_NAV2=${WITH_NAV2:-1}
 WITH_GOALS=${WITH_GOALS:-1}
 WITH_PATH_PROBES=${WITH_PATH_PROBES:-1}
+BT_XML_MODE=${BT_XML_MODE:-fleet}
+PATH_PROBE_TIMEOUT=${PATH_PROBE_TIMEOUT:-45}
 ROBOT_A_GOAL_X=${ROBOT_A_GOAL_X:--1.0}
 ROBOT_A_GOAL_Y=${ROBOT_A_GOAL_Y:-0.0}
 ROBOT_A_GOAL_YAW=${ROBOT_A_GOAL_YAW:-0.0}
@@ -129,6 +134,8 @@ sleep 2
 
 echo "LOG_DIR=$LOG_DIR"
 echo "WITH_NAV2=$WITH_NAV2 WITH_GOALS=$WITH_GOALS WITH_PATH_PROBES=$WITH_PATH_PROBES DURATION=$DURATION"
+echo "BT_XML_MODE=$BT_XML_MODE NAV2_BT_XML=${NAV2_BT_XML:-}"
+echo "PATH_PROBE_TIMEOUT=${PATH_PROBE_TIMEOUT}s"
 echo "GOALS robot_a=(${ROBOT_A_GOAL_X}, ${ROBOT_A_GOAL_Y}, ${ROBOT_A_GOAL_YAW}) robot_b=(${ROBOT_B_GOAL_X}, ${ROBOT_B_GOAL_Y}, ${ROBOT_B_GOAL_YAW})"
 
 echo "[1] Merge Nav2 params with fleet BT plugins"
@@ -285,13 +292,13 @@ fi
 
 if [ "$WITH_NAV2" = "1" ] && [ "$WITH_PATH_PROBES" = "1" ]; then
   echo "[7b] ComputePathToPose probes"
-  python3 "${COMPUTE_PATH_PROBE_PY}" robot_a \
+  timeout "${PATH_PROBE_TIMEOUT}s" python3 "${COMPUTE_PATH_PROBE_PY}" robot_a \
     --start-x -4.0 --start-y 0.0 --start-yaw 0.0 \
     --goal current:0.0:0.0:0.0 \
     --goal reachable:${ROBOT_A_GOAL_X}:${ROBOT_A_GOAL_Y}:${ROBOT_A_GOAL_YAW} \
     --goal corridor_far:1.0:0.0:0.0 \
     > "${LOG_DIR}/compute_path_robot_a.log" 2>&1 || true
-  python3 "${COMPUTE_PATH_PROBE_PY}" robot_b \
+  timeout "${PATH_PROBE_TIMEOUT}s" python3 "${COMPUTE_PATH_PROBE_PY}" robot_b \
     --start-x 4.0 --start-y 0.0 --start-yaw 3.14159 \
     --goal current:0.0:0.0:3.14159 \
     --goal reachable:${ROBOT_B_GOAL_X}:${ROBOT_B_GOAL_Y}:${ROBOT_B_GOAL_YAW} \

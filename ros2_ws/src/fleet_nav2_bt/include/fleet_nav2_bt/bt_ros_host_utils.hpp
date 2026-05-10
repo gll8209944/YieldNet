@@ -10,8 +10,12 @@ namespace fleet_nav2_bt
 {
 
 /**
- * Prefer the Nav2 / BT blackboard "node" (the node that is spun by the executor).
- * Standalone fleet_bt_runner sets this so subscriptions and timers are processed by spin().
+ * Build a lightweight ROS node in the same namespace as Nav2's BT node.
+ *
+ * Nav2's blackboard node is not a reliable place for custom BT subscriptions in
+ * this package: subscription callbacks can remain unprocessed while BT ticks are
+ * executing. A per-plugin node lets the plugin call rclcpp::spin_some() in tick()
+ * without interfering with Nav2's lifecycle executor.
  */
 inline rclcpp::Node::SharedPtr host_node_from_tree_config(
   const BT::NodeConfiguration & conf,
@@ -23,7 +27,7 @@ inline rclcpp::Node::SharedPtr host_node_from_tree_config(
   try {
     auto n = conf.blackboard->template get<rclcpp::Node::SharedPtr>("node");
     if (n) {
-      return n;
+      return rclcpp::Node::make_shared(fallback_name, n->get_namespace());
     }
   } catch (const std::exception &) {
   }

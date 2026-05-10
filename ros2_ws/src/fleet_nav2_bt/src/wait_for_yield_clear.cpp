@@ -70,6 +70,8 @@ WaitForYieldClear::~WaitForYieldClear()
 
 BT::NodeStatus WaitForYieldClear::tick()
 {
+  rclcpp::spin_some(node_);
+
   if (first_tick_) {
     first_tick_ = false;
 

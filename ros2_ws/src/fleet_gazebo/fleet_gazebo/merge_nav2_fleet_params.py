@@ -3,7 +3,12 @@
 
 Usage:
   fleet_merge_nav2_fleet_params /path/to/out.yaml [robot_namespace] [/path/to/nav2_params.yaml]
+
+Env:
+  BT_XML_MODE  - fleet | default | goal_updated | conflict | speed (default: fleet)
+  NAV2_BT_XML  - absolute BT XML path override
 """
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +20,14 @@ FLEET_BT_PLUGINS = [
     'fleet_wait_for_yield_clear_bt_node',
     'fleet_adjust_speed_for_fleet_bt_node',
 ]
+
+BT_XML_BY_MODE = {
+    'fleet': 'navigate_with_fleet.xml',
+    'default': 'navigate_default_follow_path.xml',
+    'goal_updated': 'navigate_goal_updated_follow_path.xml',
+    'conflict': 'navigate_with_conflict_check.xml',
+    'speed': 'navigate_with_speed.xml',
+}
 
 
 def _rewrite_nav2_namespace(value, key: str, namespace: str):
@@ -76,7 +89,17 @@ def main() -> None:
         data = yaml.safe_load(fh)
 
     fleet_share = get_package_share_directory('fleet_nav2_bt')
-    bt_xml = str(Path(fleet_share) / 'behavior_trees' / 'navigate_with_fleet.xml')
+    bt_xml_override = os.environ.get('NAV2_BT_XML', '').strip()
+    bt_xml_mode = os.environ.get('BT_XML_MODE', 'fleet').strip() or 'fleet'
+    if bt_xml_override:
+        bt_xml = bt_xml_override
+    else:
+        try:
+            bt_xml_name = BT_XML_BY_MODE[bt_xml_mode]
+        except KeyError:
+            valid_modes = ', '.join(sorted(BT_XML_BY_MODE))
+            raise SystemExit(f'Unknown BT_XML_MODE={bt_xml_mode!r}; valid modes: {valid_modes}')
+        bt_xml = str(Path(fleet_share) / 'behavior_trees' / bt_xml_name)
 
     nav_bt = data['bt_navigator']['ros__parameters']
     libs = list(nav_bt['plugin_lib_names'])
@@ -94,6 +117,7 @@ def main() -> None:
         yaml.dump(data, fh, sort_keys=False, default_flow_style=False)
 
     print(f'Wrote {dest}')
+    print(f'bt_xml_mode={bt_xml_mode}')
     print(f'default_nav_to_pose_bt_xml={bt_xml}')
     if namespace:
         print(f'nav2_namespace={namespace}')

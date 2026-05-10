@@ -176,6 +176,8 @@ double AdjustSpeedForFleet::getSpeedScaling(const std::string & state)
 
 BT::NodeStatus AdjustSpeedForFleet::tick()
 {
+  rclcpp::spin_some(node_);
+
   // Get speed scaling from fleet state (already computed in subscription callback)
   double speed_ratio = current_speed_ratio_;
 
