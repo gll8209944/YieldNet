@@ -27,6 +27,8 @@ CMD_ACK_YIELD = 1
 CMD_RESUME = 2
 CMD_EMERGENCY_STOP = 3
 
+PRIORITY_EPSILON = 1e-6
+
 # Speed scaling factors per state
 SPEED_SCALING = {
     CoordinationState.NORMAL: 1.0,
@@ -41,6 +43,25 @@ SPEED_SCALING = {
 PATH_CONFLICT_THRESHOLD = 1.5  # meters
 PATH_LOOKAHEAD = 5.0  # meters
 CONFLICT_HYSTERESIS_TICKS = 5  # must be clear for 5 ticks to clear conflict
+
+
+def has_passing_priority(
+    robot_id: str,
+    robot_priority: float,
+    peer_id: str,
+    peer_priority: float,
+) -> bool:
+    """Return True when this robot should pass before the peer.
+
+    Dynamic priority scores can be exactly equal in symmetric corridor tests.
+    A deterministic robot_id tiebreaker prevents both peers from choosing the
+    same branch and deadlocking the yield negotiation.
+    """
+    if robot_priority > peer_priority + PRIORITY_EPSILON:
+        return True
+    if peer_priority > robot_priority + PRIORITY_EPSILON:
+        return False
+    return robot_id < peer_id
 
 
 class FleetCoordinator(Node):
@@ -132,6 +153,8 @@ class FleetCoordinator(Node):
 
         # Pending yield acknowledgments
         self._pending_ack_from: set[str] = set()
+        self._ack_sent_to: set[str] = set()
+        self._yielding_to_peer: str | None = None
 
     def _init_publishers(self):
         """Initialize fleet topic publishers."""
@@ -225,8 +248,8 @@ class FleetCoordinator(Node):
         # Planned path at 2 Hz (every 0.5 seconds)
         self.path_timer = self.create_timer(0.5, self._publish_planned_path)
 
-        # Diagnostic status at 1Hz
-        self.diagnostic_timer = self.create_timer(1.0, self._publish_diagnostic)
+        # Local BT speed-control feedback at the coordination loop rate.
+        self.diagnostic_timer = self.create_timer(0.1, self._publish_diagnostic)
 
     def _heartbeat_callback(self, msg: RobotHeartbeat):
         """Handle incoming heartbeat from peer.
@@ -292,7 +315,17 @@ class FleetCoordinator(Node):
 
         peer_id = msg.from_robot
 
-        if msg.command == CMD_ACK_YIELD:
+        if msg.command == CMD_REQUEST_YIELD:
+            self.get_logger().info(f"REQUEST_YIELD received from {peer_id}")
+            if peer_id in self.peers:
+                self.peers[peer_id].coordination_state = CoordinationState.PASSING
+            self.current_state = CoordinationState.YIELDING
+            self._yielding_to_peer = peer_id
+            if self.own_yield_start_time == 0.0:
+                self.own_yield_start_time = time.time()
+            self._publish_ack_yield(peer_id)
+
+        elif msg.command == CMD_ACK_YIELD:
             self.get_logger().info(f"ACK_YIELD received from {peer_id}")
             self._pending_ack_from.discard(peer_id)
             # Remote peer has yielded to us - we can PASSING
@@ -303,8 +336,9 @@ class FleetCoordinator(Node):
             self.get_logger().info(f"RESUME received from {peer_id}")
             self._pending_ack_from.discard(peer_id)
             # Remote peer has resumed - clear our yielding state if we were waiting
-            if self.current_state == CoordinationState.YIELDING:
+            if self.current_state == CoordinationState.YIELDING or self._yielding_to_peer == peer_id:
                 self.current_state = CoordinationState.NORMAL
+                self._yielding_to_peer = None
                 self.own_yield_start_time = 0.0
 
         elif msg.command == CMD_EMERGENCY_STOP:
@@ -421,6 +455,31 @@ class FleetCoordinator(Node):
         # Step 1: Remove timed-out peers
         self._remove_timed_out_peers(current_time)
 
+        # Honor an explicit yield request until the requester has cleared the
+        # caution zone. This prevents a later CAUTION/AWARENESS tick from
+        # overwriting the stop command before the passing robot is clear.
+        if self._yielding_to_peer:
+            peer = self.peers.get(self._yielding_to_peer)
+            if peer is None:
+                self._yielding_to_peer = None
+                self.own_yield_start_time = 0.0
+            else:
+                dist = self._distance_to_peer(peer)
+                if dist < self.caution_range:
+                    previous_state = self.current_state
+                    self.current_state = CoordinationState.YIELDING
+                    if previous_state != self.current_state:
+                        self.get_logger().info(
+                            f"STATE_CHANGE: {self.robot_id} {previous_state.name} -> {self.current_state.name} "
+                            f"(speed_ratio=0.00, yielding_to={peer.robot_id})"
+                        )
+                    self._handle_yield_timeout(current_time)
+                    self._publish_speed_scaling(SPEED_SCALING[CoordinationState.YIELDING])
+                    return
+                self._publish_resume_to(peer.robot_id)
+                self._yielding_to_peer = None
+                self.own_yield_start_time = 0.0
+
         # Step 2: Evaluate each peer independently
         worst_state = CoordinationState.NORMAL
         worst_speed_ratio = 1.0
@@ -481,7 +540,7 @@ class FleetCoordinator(Node):
             Tuple of (coordination_state, speed_ratio)
         """
         # Calculate Euclidean distance to peer
-        dist = math.sqrt(peer.x**2 + peer.y**2)
+        dist = self._distance_to_peer(peer)
 
         # Emergency check - always triggered regardless of priority
         if dist < self.emergency_range:
@@ -505,14 +564,14 @@ class FleetCoordinator(Node):
             my_priority = self._calculate_own_priority()
             peer_priority = peer.calculate_priority_score()
 
-            if my_priority > peer_priority:
+            if has_passing_priority(self.robot_id, my_priority, peer.robot_id, peer_priority):
                 # I have higher priority - I can pass
+                if peer.robot_id not in self._pending_ack_from:
+                    self._send_yield_request(peer.robot_id)
                 return CoordinationState.PASSING, SPEED_SCALING[CoordinationState.PASSING]
             else:
                 # Peer has higher priority - I must yield
-                if peer.coordination_state != CoordinationState.YIELDING:
-                    # Peer not yet yielding - send request
-                    self._send_yield_request(peer.robot_id)
+                self._publish_ack_yield(peer.robot_id)
                 return CoordinationState.YIELDING, SPEED_SCALING[CoordinationState.YIELDING]
 
         elif dist < self.caution_range:
@@ -526,6 +585,10 @@ class FleetCoordinator(Node):
         else:
             # Outside awareness range - normal operation
             return CoordinationState.NORMAL, SPEED_SCALING[CoordinationState.NORMAL]
+
+    def _distance_to_peer(self, peer: PeerState) -> float:
+        """Return current Euclidean distance to a peer in map coordinates."""
+        return math.sqrt((peer.x - self.own_x)**2 + (peer.y - self.own_y)**2)
 
     def _check_path_conflict(self, peer: PeerState) -> bool:
         """Check if paths intersect with peer.
@@ -590,7 +653,7 @@ class FleetCoordinator(Node):
         return score
 
     def _send_yield_request(self, peer_id: str):
-        """Send yield request to peer with lower priority.
+        """Send yield request to lower-priority peer before passing.
 
         Args:
             peer_id: Robot ID of peer to request yield from
@@ -612,6 +675,19 @@ class FleetCoordinator(Node):
         self._pending_ack_from.add(peer_id)
         self.get_logger().info(f"REQUEST_YIELD sent to {peer_id}")
 
+    def _publish_ack_yield(self, peer_id: str):
+        """Notify a higher-priority peer that this robot is yielding."""
+        if peer_id in self._ack_sent_to:
+            return
+
+        msg = YieldCommand()
+        msg.from_robot = self.robot_id
+        msg.to_robot = peer_id
+        msg.command = CMD_ACK_YIELD
+        self.yield_pub.publish(msg)
+        self._ack_sent_to.add(peer_id)
+        self.get_logger().info(f"ACK_YIELD sent to {peer_id}")
+
     def _handle_yield_timeout(self, current_time: float):
         """Handle yield timeout - force resume after YIELD_TIMEOUT seconds.
 
@@ -621,6 +697,8 @@ class FleetCoordinator(Node):
         """
         if self.current_state != CoordinationState.YIELDING:
             self.own_yield_start_time = 0.0
+            self._ack_sent_to.clear()
+            self._yielding_to_peer = None
             return
 
         if self.own_yield_start_time == 0:
@@ -631,8 +709,21 @@ class FleetCoordinator(Node):
             self.get_logger().warn(f"Yield timeout ({self.yield_timeout}s), forcing resume")
             self._publish_resume()
             self.current_state = CoordinationState.NORMAL
+            self._yielding_to_peer = None
             self.own_yield_start_time = 0.0
             self.own_yield_count += 1  # Increment yield count for priority
+            self._ack_sent_to.clear()
+
+    def _publish_resume_to(self, peer_id: str):
+        """Send RESUME command to one peer."""
+        msg = YieldCommand()
+        msg.from_robot = self.robot_id
+        msg.to_robot = peer_id
+        msg.command = CMD_RESUME
+        self.yield_pub.publish(msg)
+        self._pending_ack_from.discard(peer_id)
+        self._ack_sent_to.discard(peer_id)
+        self.get_logger().warn(f"RESUME sent to {peer_id}")
 
     def _publish_resume(self):
         """Send RESUME command to all peers."""
@@ -646,6 +737,7 @@ class FleetCoordinator(Node):
             self.yield_pub.publish(msg)
 
         self._pending_ack_from.clear()
+        self._ack_sent_to.clear()
         self.get_logger().warn("RESUME sent to all peers")
 
     def _publish_speed_scaling(self, speed_ratio: float):

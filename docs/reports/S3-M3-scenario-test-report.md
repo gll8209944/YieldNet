@@ -1258,3 +1258,90 @@ BT_XML_MODE=fleet bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 90
 1. 基于当前 Nav2 标准树结构继续调稳定性：缩小 DWB/local costmap out-of-plan 问题。
 2. 增加 collision/deadlock/emergency 自动判定器，避免人工推断。
 3. 针对 Fleet 状态抖动单独调参或加入状态滞回，再重跑 90s / 180s full fleet yield。
+
+## Scenario: DWB / yield loop / automatic safety judge fix
+
+日期：2026-05-10
+
+### scope
+
+本轮目标是修复上一轮 `PARTIAL PASS` 中的 3 个缺口：
+
+- `/fleet/yield` 没有 request/ack/resume 证据。
+- DWB/local costmap 抖动导致 full fleet 目标不稳定。
+- 缺少 collision / deadlock / unrecovered emergency 自动判据。
+
+### code changes
+
+- 修复 `fleet_coordinator.py` 的 peer 距离计算：从 `sqrt(peer.x^2 + peer.y^2)` 改为相对距离 `sqrt((peer.x-own_x)^2 + (peer.y-own_y)^2)`。
+- 增加确定性优先级 tie-break：动态优先级相等时按 `robot_id` 字典序决定 passing/yielding，避免双方分支不一致。
+- 补齐 `REQUEST_YIELD` 处理：低优先级机器人收到 request 后进入 `YIELDING` 并发布 `ACK_YIELD`。
+- 为 `WaitForYieldClear` 增加 `/speed_limit` 输出：yield 等待期间持续发布 `0%`，resume/halt/timeout 发布 `100%`，避免 BT 分支阻塞 `AdjustSpeedForFleet` 时无法真正让 Nav2 controller 停车。
+- 修复 `WaitForYieldClear` 在 blackboard `robot_id` 未设置时 `from_robot=''` 的问题：从 ROS namespace 推断 robot id。
+- 在 `merge_nav2_fleet_params.py` 中加入 e2e 稳定性参数：
+  - `controller_server.failure_tolerance >= 2.0`
+  - `progress_checker.required_movement_radius <= 0.1`
+  - `progress_checker.movement_time_allowance >= 20.0`
+  - local costmap `width/height >= 6`
+  - local costmap `inflation_radius <= 0.35`
+- 新增 `judge_nav2_e2e_safety.py`，自动输出：
+  - collision events / min distance
+  - deadlock candidate windows and pass/fail
+  - unrecovered emergency pass/fail
+  - goal success and yield command counts
+- `run_m3_nav2_e2e_yield.sh` 接入 safety judge，并将 goal sender 的 AMCL pose 等待改为 `SEND_GOAL_AMCL_TIMEOUT`，默认 `45s`。
+
+### verification commands
+
+```bash
+cd /home/guolinlin/ros2_ws/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+colcon test
+colcon test-result --verbose
+```
+
+结果：
+
+- `colcon build`: PASS，`Summary: 4 packages finished`
+- `colcon test`: PASS，`Summary: 4 packages finished`
+- `colcon test-result --verbose`: PASS，`33 tests, 0 errors, 0 failures, 0 skipped`
+
+### scenario runs
+
+| LOG_DIR | Duration | Result | Key evidence |
+|---------|----------|--------|--------------|
+| `/tmp/fleet_test_nav2_e2e_yield_20260510_191259` | 90s | PASS | `robot_a` / `robot_b` both `TaskResult.SUCCEEDED`; safety judge `passed=true`; `/speed_limit` includes `0%`; `REQUEST_YIELD=97`, `ACK_YIELD=502`, `RESUME=472` |
+| `/tmp/fleet_test_nav2_e2e_yield_20260510_192314` | 180s | FAIL | both goals `TaskResult.SUCCEEDED`; deadlock pass; unrecovered emergency pass; collision fail: `events=173`, `min_distance_m=0.032` |
+| `/tmp/fleet_test_nav2_e2e_yield_20260510_192935` | 90s | FAIL | both goals `TaskResult.SUCCEEDED`; deadlock pass; unrecovered emergency pass; collision fail: `events=16`, `min_distance_m=0.112` |
+
+### evidence summary
+
+| 检查项 | PASS 条件 | 实际证据 | 判定 | 备注 |
+|--------|-----------|----------|------|------|
+| build / tests | build + tests 全通过 | 4 packages build pass；33 tests pass | PASS | 远端 ROS 环境验证 |
+| AMCL pose wait | 两机 goal sender 可等待 AMCL | `SEND_GOAL_AMCL_TIMEOUT=45s` 后有效 180s 中两机均进入 Nav2 active | PASS | 仍可能受仿真启动负载影响 |
+| Nav2 goals | 两机都完成目标 | 180s 最新有效轮两机 `TaskResult.SUCCEEDED` | PASS | 目标为对向穿越中心点 |
+| yield messages | `/fleet/yield` 有 request/ack/resume | 180s: `REQUEST_YIELD=5`, `ACK_YIELD=371`, `RESUME=381` | PASS | 消息量偏高，存在抖动 |
+| speed limit execution | yield 期间能发 0% | `speed_robot_*.log` 出现 `speed_limit=0.000` | PASS | `WaitForYieldClear` 直接发布 |
+| deadlock judge | 0 deadlock events | 180s: `deadlock.passed=true`, `events=0` | PASS | candidate windows 为 goal 前/后静止，不计失败 |
+| unrecovered emergency judge | 无未恢复 emergency | 180s: `unrecovered_emergency.passed=true` | PASS | - |
+| collision judge | `min_distance >= 0.35m` 且 events=0 | 180s: `events=173`, `min_distance_m=0.032`; 90s 复验: `events=16`, `min_distance_m=0.112` | FAIL | 不能宣称 0 collision |
+
+### final verdict
+
+**PARTIAL PASS**
+
+理由：
+
+1. 本轮已修通 `/fleet/yield` request / ack / resume 证据链，并让 `/speed_limit=0%` 可被 Nav2 controller 观测到。
+2. 自动 safety judge 已接入 runner，能够阻止 collision / deadlock / unrecovered emergency 被人工误判为 PASS。
+3. 有一轮 90s full fleet 验证达到 `passed=true`，说明修复方向有效。
+4. 但正式 180s 和复验 90s 仍出现真实 collision 判据失败，最小距离低至 `0.032m` / `0.112m`，不满足 M3/P0 的 0 collision 完成定义。
+
+### remaining risks
+
+1. yield/resume 消息量偏高，说明 `WaitForYieldClear` 与 coordinator latch 之间仍存在抖动，需要节流或更明确的 per-peer yield ownership。
+2. 当前对向穿越中心点目标会把机器人带入极窄相遇区域，局部速度限制虽然生效，但还不足以稳定保证 `min_distance >= 0.35m`。
+3. `cmd_vel_to_odom.py` 仍只是 Gazebo / namespace workaround，不能作为生产 odom 来源；当前 collision judge 依赖该 e2e odom 证据。

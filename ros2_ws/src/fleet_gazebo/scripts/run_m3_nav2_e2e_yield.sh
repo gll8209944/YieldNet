@@ -10,6 +10,8 @@
 #   BT_XML_MODE - fleet | default | goal_updated | conflict | speed (default: fleet)
 #   NAV2_BT_XML - absolute BT XML override, takes precedence over BT_XML_MODE.
 #   PATH_PROBE_TIMEOUT - per-robot ComputePathToPose probe timeout in seconds (default 45)
+#   SAFETY_JUDGE - 1: run offline collision/deadlock/emergency judge at end (default 1)
+#   SEND_GOAL_AMCL_TIMEOUT - AMCL pose wait for goal sender in seconds (default 45)
 #
 # Fleet-only motion (no Nav2):
 #   WITH_NAV2=0 bash run_m3_nav2_e2e_yield.sh
@@ -33,8 +35,10 @@ LOG_DIR=/tmp/fleet_test_nav2_e2e_yield_${TIMESTAMP}
 WITH_NAV2=${WITH_NAV2:-1}
 WITH_GOALS=${WITH_GOALS:-1}
 WITH_PATH_PROBES=${WITH_PATH_PROBES:-1}
+SAFETY_JUDGE=${SAFETY_JUDGE:-1}
 BT_XML_MODE=${BT_XML_MODE:-fleet}
 PATH_PROBE_TIMEOUT=${PATH_PROBE_TIMEOUT:-45}
+SEND_GOAL_AMCL_TIMEOUT=${SEND_GOAL_AMCL_TIMEOUT:-45}
 ROBOT_A_GOAL_X=${ROBOT_A_GOAL_X:--1.0}
 ROBOT_A_GOAL_Y=${ROBOT_A_GOAL_Y:-0.0}
 ROBOT_A_GOAL_YAW=${ROBOT_A_GOAL_YAW:-0.0}
@@ -88,9 +92,10 @@ MOVE_PY="${PKG_SHARE}/scripts/move_robots_corridor_two.py"
 SEND_GOAL_PY="${PKG_SHARE}/scripts/send_nav2_goal.py"
 COLLECTOR_PY="${PKG_SHARE}/scripts/collect_nav2_e2e_topics.py"
 COMPUTE_PATH_PROBE_PY="${PKG_SHARE}/scripts/compute_path_probe.py"
+SAFETY_JUDGE_PY="${PKG_SHARE}/scripts/judge_nav2_e2e_safety.py"
 WRITE_CORRIDOR_MAP_PY="${PKG_SHARE}/scripts/write_corridor_map.py"
 C2O_PY="${ROS2_WS}/src/fleet_coordination/fleet_coordination/cmd_vel_to_odom.py"
-for helper in COLLECTOR_PY COMPUTE_PATH_PROBE_PY WRITE_CORRIDOR_MAP_PY; do
+for helper in COLLECTOR_PY COMPUTE_PATH_PROBE_PY SAFETY_JUDGE_PY WRITE_CORRIDOR_MAP_PY; do
   helper_path="${!helper}"
   if [ ! -f "$helper_path" ]; then
     helper_name="$(basename "$helper_path")"
@@ -134,8 +139,10 @@ sleep 2
 
 echo "LOG_DIR=$LOG_DIR"
 echo "WITH_NAV2=$WITH_NAV2 WITH_GOALS=$WITH_GOALS WITH_PATH_PROBES=$WITH_PATH_PROBES DURATION=$DURATION"
+echo "SAFETY_JUDGE=$SAFETY_JUDGE"
 echo "BT_XML_MODE=$BT_XML_MODE NAV2_BT_XML=${NAV2_BT_XML:-}"
 echo "PATH_PROBE_TIMEOUT=${PATH_PROBE_TIMEOUT}s"
+echo "SEND_GOAL_AMCL_TIMEOUT=${SEND_GOAL_AMCL_TIMEOUT}s"
 echo "GOALS robot_a=(${ROBOT_A_GOAL_X}, ${ROBOT_A_GOAL_Y}, ${ROBOT_A_GOAL_YAW}) robot_b=(${ROBOT_B_GOAL_X}, ${ROBOT_B_GOAL_Y}, ${ROBOT_B_GOAL_YAW})"
 
 echo "[1] Merge Nav2 params with fleet BT plugins"
@@ -328,6 +335,7 @@ if [ "$WITH_NAV2" = "1" ] && [ "$WITH_GOALS" = "1" ]; then
     export ROS_DOMAIN_ID=0
     sleep 5
     python3 ${SEND_GOAL_PY} robot_a ${ROBOT_A_GOAL_X} ${ROBOT_A_GOAL_Y} ${ROBOT_A_GOAL_YAW} \
+      --amcl-timeout ${SEND_GOAL_AMCL_TIMEOUT} \
       --initial-x -4.0 --initial-y 0.0 --initial-yaw 0.0 \
       2>&1 | tee $LOG_DIR/goal_robot_a.log || true
     exec bash"
@@ -337,6 +345,7 @@ if [ "$WITH_NAV2" = "1" ] && [ "$WITH_GOALS" = "1" ]; then
     export ROS_DOMAIN_ID=0
     sleep 7
     python3 ${SEND_GOAL_PY} robot_b ${ROBOT_B_GOAL_X} ${ROBOT_B_GOAL_Y} ${ROBOT_B_GOAL_YAW} \
+      --amcl-timeout ${SEND_GOAL_AMCL_TIMEOUT} \
       --initial-x 4.0 --initial-y 0.0 --initial-yaw 3.14159 \
       2>&1 | tee $LOG_DIR/goal_robot_b.log || true
     exec bash"
@@ -355,5 +364,21 @@ screen -dmS e2e_collector bash -c "
     exec bash" &
 
 sleep "$DURATION"
+if [ "$SAFETY_JUDGE" = "1" ]; then
+  echo "[10b] Offline safety judge"
+  set +e
+  python3 "${SAFETY_JUDGE_PY}" \
+    --log-dir "${LOG_DIR}" \
+    --json-out "${LOG_DIR}/safety_judge.json" \
+    > "${LOG_DIR}/safety_judge.log" 2>&1
+  judge_rc=$?
+  set -e
+  cat "${LOG_DIR}/safety_judge.log"
+  echo "$judge_rc" > "${LOG_DIR}/safety_judge.exit_code"
+  if [ "$judge_rc" -ne 0 ]; then
+    echo "ERROR: safety judge failed with exit code ${judge_rc}"
+    exit "$judge_rc"
+  fi
+fi
 echo "[11] Done. Logs under $LOG_DIR"
 echo "Review: grep -E 'published speed_limit|YIELDING|Yield|fleet_state' $LOG_DIR/*.log"

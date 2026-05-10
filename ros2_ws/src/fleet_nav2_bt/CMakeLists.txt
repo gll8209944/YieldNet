@@ -40,6 +40,7 @@ ament_target_dependencies(wait_for_yield_clear
   geometry_msgs
   std_msgs
   behaviortree_cpp_v3
+  nav2_msgs
 
   fleet_msgs
 )
@@ -78,6 +79,7 @@ ament_target_dependencies(fleet_wait_for_yield_clear_bt_node
   geometry_msgs
   std_msgs
   behaviortree_cpp_v3
+  nav2_msgs
   fleet_msgs
 )
 set_target_properties(fleet_wait_for_yield_clear_bt_node PROPERTIES OUTPUT_NAME fleet_wait_for_yield_clear_bt_node)
@@ -102,6 +104,7 @@ ament_target_dependencies(fleet_bt_runner
   geometry_msgs
   std_msgs
   behaviortree_cpp_v3
+  nav2_msgs
 )
 target_link_libraries(fleet_bt_runner
   check_fleet_conflict

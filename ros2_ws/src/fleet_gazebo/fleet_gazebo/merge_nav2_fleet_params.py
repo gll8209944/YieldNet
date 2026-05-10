@@ -66,6 +66,37 @@ def _walk_and_rewrite(node, namespace: str):
             _walk_and_rewrite(item, namespace)
 
 
+def _apply_e2e_nav2_stability_overrides(data):
+    """Apply narrow Nav2 overrides for the corridor e2e yield scenario."""
+    controller_params = data.get('controller_server', {}).get('ros__parameters', {})
+    controller_params['failure_tolerance'] = max(
+        float(controller_params.get('failure_tolerance', 0.0) or 0.0),
+        2.0,
+    )
+
+    progress_checker = controller_params.get('progress_checker', {})
+    if isinstance(progress_checker, dict):
+        progress_checker['required_movement_radius'] = min(
+            float(progress_checker.get('required_movement_radius', 0.5) or 0.5),
+            0.1,
+        )
+        progress_checker['movement_time_allowance'] = max(
+            float(progress_checker.get('movement_time_allowance', 10.0) or 10.0),
+            20.0,
+        )
+
+    for costmap_name in ('local_costmap',):
+        costmap = data.get(costmap_name, {}).get(f'{costmap_name}', {}).get('ros__parameters', {})
+        costmap['width'] = max(int(costmap.get('width', 3) or 3), 6)
+        costmap['height'] = max(int(costmap.get('height', 3) or 3), 6)
+        inflation = costmap.get('inflation_layer', {})
+        if isinstance(inflation, dict):
+            inflation['inflation_radius'] = min(
+                float(inflation.get('inflation_radius', 0.55) or 0.55),
+                0.35,
+            )
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -111,6 +142,8 @@ def main() -> None:
 
     if namespace:
         _walk_and_rewrite(data, namespace)
+
+    _apply_e2e_nav2_stability_overrides(data)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, 'w', encoding='utf-8') as fh:

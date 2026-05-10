@@ -9,6 +9,7 @@ And lexicographic tie-breaking by robot_id.
 """
 
 import pytest
+from fleet_coordination.fleet_coordinator import has_passing_priority
 from fleet_coordination.peer_state import PeerState
 
 
@@ -120,6 +121,14 @@ class TestPriorityComparison:
         robot_ids_equal_score = ["robot_a", "robot_b"]
         robot_ids_equal_score.sort()
         assert robot_ids_equal_score[0] == "robot_a"  # robot_a wins tie
+
+        assert has_passing_priority("robot_a", score_a, "robot_b", score_b)
+        assert not has_passing_priority("robot_b", score_b, "robot_a", score_a)
+
+    def test_numeric_priority_beats_lexicographic_tiebreaker(self):
+        """Dynamic priority score should dominate robot_id ordering."""
+        assert has_passing_priority("robot_b", 2.0, "robot_a", 1.0)
+        assert not has_passing_priority("robot_a", 1.0, "robot_b", 2.0)
 
     def test_three_robot_dynamic_priority_order(self):
         """Three robots with different yield counts should be ordered correctly."""

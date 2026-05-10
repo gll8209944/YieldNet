@@ -7,6 +7,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "nav2_msgs/msg/speed_limit.hpp"
 #include "fleet_msgs/msg/yield_command.hpp"
 #include "behaviortree_cpp_v3/action_node.h"
 
@@ -33,6 +34,10 @@ WaitForYieldClear::WaitForYieldClear(
   // Note: This is a safety fallback. Production path should use Nav2 controller.
   cmd_vel_pub_ = node_->create_publisher<geometry_msgs::msg::Twist>(
     "cmd_vel",
+    rclcpp::QoS(rclcpp::KeepLast(1)).reliable());
+
+  speed_limit_pub_ = node_->create_publisher<nav2_msgs::msg::SpeedLimit>(
+    "speed_limit",
     rclcpp::QoS(rclcpp::KeepLast(1)).reliable());
 
   // Publisher for yield commands using fleet_msgs/YieldCommand
@@ -79,6 +84,7 @@ BT::NodeStatus WaitForYieldClear::tick()
     getInput<std::string>("robot_id", robot_id_);
     getInput<std::string>("peer_id", peer_id_);
     getInput<double>("timeout", timeout_);
+    normalizeRobotId();
 
     // Reset state
     resume_received_ = false;
@@ -93,6 +99,7 @@ BT::NodeStatus WaitForYieldClear::tick()
     cmd.linear.x = 0.0;
     cmd.angular.z = 0.0;
     cmd_vel_pub_->publish(cmd);
+    publishSpeedLimit(0.0);
 
     RCLCPP_INFO(node_->get_logger(), "Yield started: %s yielding to %s, timeout=%.1fs",
       robot_id_.c_str(), peer_id_.c_str(), timeout_);
@@ -104,6 +111,7 @@ BT::NodeStatus WaitForYieldClear::tick()
   if (resume_received_) {
     first_tick_ = true;
     sendYieldCommand(CMD_RESUME);
+    publishSpeedLimit(100.0);
     RCLCPP_INFO(node_->get_logger(), "Yield cleared, resuming");
     return BT::NodeStatus::SUCCESS;
   }
@@ -115,6 +123,7 @@ BT::NodeStatus WaitForYieldClear::tick()
     RCLCPP_WARN(node_->get_logger(), "Yield timeout after %.1fs", elapsed);
     // Force resume
     sendYieldCommand(CMD_RESUME);
+    publishSpeedLimit(100.0);
     return BT::NodeStatus::FAILURE;
   }
 
@@ -123,6 +132,7 @@ BT::NodeStatus WaitForYieldClear::tick()
   cmd.linear.x = 0.0;
   cmd.angular.z = 0.0;
   cmd_vel_pub_->publish(cmd);
+  publishSpeedLimit(0.0);
 
   return BT::NodeStatus::RUNNING;
 }
@@ -132,7 +142,32 @@ void WaitForYieldClear::halt()
   first_tick_ = true;
   // Send RESUME when halted
   sendYieldCommand(CMD_RESUME);
+  publishSpeedLimit(100.0);
   RCLCPP_INFO(node_->get_logger(), "Yield halted, sent RESUME");
+}
+
+void WaitForYieldClear::publishSpeedLimit(double speed_percent)
+{
+  nav2_msgs::msg::SpeedLimit msg;
+  msg.percentage = true;
+  msg.speed_limit = speed_percent;
+  speed_limit_pub_->publish(msg);
+}
+
+void WaitForYieldClear::normalizeRobotId()
+{
+  if (!robot_id_.empty() && robot_id_.front() != '{') {
+    return;
+  }
+
+  std::string ns = node_->get_namespace();
+  if (!ns.empty() && ns != "/") {
+    if (ns.front() == '/') {
+      ns.erase(0, 1);
+    }
+    auto slash = ns.find('/');
+    robot_id_ = ns.substr(0, slash);
+  }
 }
 
 void WaitForYieldClear::sendYieldCommand(uint8_t command)

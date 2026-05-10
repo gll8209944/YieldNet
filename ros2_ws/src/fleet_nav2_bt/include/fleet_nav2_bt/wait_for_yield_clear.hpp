@@ -7,6 +7,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "nav2_msgs/msg/speed_limit.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "fleet_msgs/msg/yield_command.hpp"
 #include "behaviortree_cpp_v3/action_node.h"
@@ -67,9 +68,12 @@ private:
    * @param command Command type (CMD_REQUEST_YIELD, CMD_ACK_YIELD, CMD_RESUME, CMD_EMERGENCY_STOP)
    */
   void sendYieldCommand(uint8_t command);
+  void publishSpeedLimit(double speed_percent);
+  void normalizeRobotId();
 
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
+  rclcpp::Publisher<nav2_msgs::msg::SpeedLimit>::SharedPtr speed_limit_pub_;
   rclcpp::Publisher<fleet_msgs::msg::YieldCommand>::SharedPtr yield_pub_;
   rclcpp::Subscription<fleet_msgs::msg::YieldCommand>::SharedPtr yield_sub_;
 
