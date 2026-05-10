@@ -44,7 +44,7 @@ def main() -> None:
     nav.get_logger().info('Sending NavigateToPose goal directly (skipping waitUntilNav2Active)')
     nav.goToPose(pose)
     start = time.time()
-    while not nav.isNav2Complete():
+    while not nav.isTaskComplete():
         feedback = nav.getFeedback()
         if feedback:
             nav.get_logger().debug(str(feedback))
