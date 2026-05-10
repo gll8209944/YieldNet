@@ -924,3 +924,197 @@ bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 90
 1. 将目标点从 `(0,0)` 改为地图中明确可达的 corridor 通道点，先验证 `goal accepted -> plan created -> robot starts moving`。
 2. 把 collector 从 `ros2 topic echo` 全部替换为受控 Python subscriber，避免 `!rclpy.ok()` 干扰。
 3. 单独对 `planner_server` 做一次 `ComputePathToPose` 最小复现，确认是 map 可达性问题还是 costmap / TF 时间戳问题。
+
+---
+
+## Scenario: Nav2 reachable goal and collector fix
+
+**日期**: 2026-05-10
+
+### root cause
+
+上一轮的 planner blocker 不是 `bt_navigator` lifecycle，而是 e2e 使用的地图与 Gazebo 场景不一致：
+
+- Gazebo 场景：`fleet_gazebo/worlds/corridor.world`
+- 原 Nav2 map：`/opt/ros/humble/share/nav2_bringup/maps/turtlebot3_world.yaml`
+- PGM 栅格抽样显示 `(0,0)`、`(-4,0)`、`(4,0)` 在 TurtleBot3 示例地图中落在 occupied / unknown / inflation 风险区，不能作为 corridor 场景的可靠目标点。
+
+本轮改为运行时生成与 `corridor.world` 对齐的 corridor occupancy map，并用 `ComputePathToPose` probe 先验证候选目标。
+
+### modified files
+
+| 路径 | 说明 |
+|------|------|
+| `ros2_ws/src/fleet_gazebo/scripts/write_corridor_map.py` | 新增 corridor map 生成器，输出 `corridor_map.yaml` / `corridor_map.pgm` 到本轮 `LOG_DIR` |
+| `ros2_ws/src/fleet_gazebo/scripts/compute_path_probe.py` | 新增最小 `ComputePathToPose` probe，验证当前点与候选目标是否可规划 |
+| `ros2_ws/src/fleet_gazebo/scripts/collect_nav2_e2e_topics.py` | 新增受控 Python subscriber collector，替代 `ros2 topic echo` 采集 status / speed_limit / yield |
+| `ros2_ws/src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh` | 使用 corridor map、可配置 reachable goals、path probes、Python collector，并修正 collector 退出竞态 |
+| `ros2_ws/src/fleet_gazebo/scripts/send_nav2_goal.py` | 显式设置 sim time，使用 `cancelTask()`，记录 `NavigateToPose` result |
+| `ros2_ws/src/fleet_nav2_bt/behavior_trees/navigate_with_fleet.xml` | 按 Nav2 BT 模式调整 `GoalUpdatedController` 与 `AdjustSpeedForFleet` 的位置，避免继续盲目使用原结构 |
+
+### map / goal analysis
+
+- 原 map：`/opt/ros/humble/share/nav2_bringup/maps/turtlebot3_world.yaml`
+- 原 map metadata：`resolution=0.05`，`origin=[-10.0, -10.0, 0.0]`，`size=384x384`
+- PGM 抽样结论：
+  - `(-4,0)` / `(4,0)` / `(0,0)` 在示例 map 中不是可靠 free cell
+  - 该 map 与 corridor walls `y=±1.5`、end walls `x=±10` 不一致
+- 新 map：每轮运行写入 `${LOG_DIR}/corridor_map.yaml`
+- 新目标：
+  - `robot_a -> (-1.0, 0.0, yaw=0.0)`
+  - `robot_b -> (1.0, 0.0, yaw=3.14159)`
+- 选择理由：两点位于 corridor 中心线 free space，可验证 `goal accepted -> plan created -> robot starts moving` 的最小闭环；本轮不宣称完整 yield e2e PASS。
+
+### ComputePathToPose result
+
+`LOG_DIR=/tmp/fleet_test_nav2_e2e_yield_20260510_142132`
+
+| robot | goal | result | path poses |
+|------|------|--------|------------|
+| `robot_a` | current `(0.0, 0.0)` | PASS | 158 |
+| `robot_a` | reachable `(-1.0, 0.0)` | PASS | 118 |
+| `robot_a` | corridor_far `(1.0, 0.0)` | PASS | 198 |
+| `robot_b` | current `(0.0, 0.0)` | PASS | 159 |
+| `robot_b` | reachable `(1.0, 0.0)` | PASS | 119 |
+| `robot_b` | corridor_far `(-1.0, 0.0)` | PASS | 199 |
+
+**判定**: PASS - 使用 corridor map 后，planner 已能对当前点和新目标生成非空 path；上一轮 `failed to create plan with tolerance 0.50` blocker 已前移。
+
+### collector replacement result
+
+- 已替换 `ros2 topic echo` 为 `collect_nav2_e2e_topics.py`
+- 本轮 `status_robot_a.log` / `status_robot_b.log` 成功采集 JSON 状态，无 `xmlrpc.client.Fault: !rclpy.ok()` 干扰
+- `speed_robot_a.log` / `speed_robot_b.log` 为空：不是 collector crash，而是本轮未观察到 `/robot_*/speed_limit` 消息
+- `yield.log` 为空：本轮未观察到 `/fleet/yield` 消息
+- 已追加 runner 修正：collector duration 比场景 duration 短 3 秒，避免 cleanup 抢先 kill collector，后续应能写入 `COLLECTOR_DONE`
+
+### build / test result
+
+远端执行：
+
+```bash
+cd /home/guolinlin/ros2_ws/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+colcon test
+colcon test-result --verbose
+```
+
+结果：
+
+- `colcon build`: PASS，`Summary: 4 packages finished`
+- `colcon test`: PASS，`Summary: 32 tests, 0 errors, 0 failures, 0 skipped`
+- 仍有 `fleet_gazebo` 的 0-test stderr 输出：`Ran 0 tests ... OK`，未构成失败
+
+### run command
+
+```bash
+cd /home/guolinlin/ros2_ws/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 90
+```
+
+为避免 SSH 断开杀掉场景，最终有效轮次使用 `nohup bash -lc ...` 在远端 detached 执行。
+
+### LOG_DIR
+
+- `LOG_DIR=/tmp/fleet_test_nav2_e2e_yield_20260510_142132`
+- runner exit code: `0`
+
+### AMCL pose evidence
+
+- `goal_robot_a.log`: `AMCL pose available; waiting for Nav2 lifecycle to become active`
+- `goal_robot_b.log`: `AMCL pose available; waiting for Nav2 lifecycle to become active`
+
+**判定**: PASS
+
+### bt_navigator active evidence
+
+- `goal_robot_a.log`: `Nav2 is ready for use!`
+- `goal_robot_b.log`: `Nav2 is ready for use!`
+
+**判定**: PASS
+
+### goal accepted evidence
+
+- `goal_robot_a.log`: `Navigating to goal: -1.0 0.0...`
+- `goal_robot_b.log`: `Navigating to goal: 1.0 0.0...`
+- 未见 `Goal was rejected`
+
+**判定**: PARTIAL - goal 未在 lifecycle 阶段被 reject，但最终仍 `TaskResult.FAILED`。
+
+### planner evidence
+
+- `ComputePathToPose` probe 对 6 个目标全部 PASS
+- `nav2_robot_a.log` / `nav2_robot_b.log` 不再出现上一轮 `GridBased: failed to create plan with tolerance 0.50`
+
+**判定**: PASS - planner 可生成 path。
+
+### robot movement evidence
+
+- `mock_path.log`:
+  - `robot_a` 从 `x=-4.00` 变化到约 `x=-3.72, y=0.05`
+  - `robot_b` 从 `x=4.00` 变化到约 `x=3.75, y=-0.00`
+- 移动幅度较小，且 goal 最终失败。
+
+**判定**: PARTIAL - 有实际位移证据，但没有形成稳定 Nav2 goal success。
+
+### /speed_limit evidence
+
+- `nav2_robot_*.log`: `AdjustSpeedForFleet` 在 BT tick 中运行
+- `speed_robot_a.log` / `speed_robot_b.log`: 空
+- `nav2_robot_*.log` 未见 `AdjustSpeedForFleet: published speed_limit`
+
+**判定**: FAIL - 本轮不能证明 `/speed_limit` 动态发布。
+
+### state transition evidence
+
+- `coord_robot_a.log`: `NORMAL -> CAUTION`，并有多次 `CAUTION <-> AWARENESS`
+- `coord_robot_b.log`: `NORMAL -> CAUTION`，并有多次 `CAUTION <-> AWARENESS`
+- `status_robot_*.log` 采集到 `speed_ratio=0.5` 与 `speed_ratio=1.0`
+- 未见 `YIELDING` / `PASSING`
+
+**判定**: PARTIAL
+
+### yield / resume evidence
+
+- `yield.log`: 空
+- `coord_*.log` / `nav2_robot_*.log` 未见 `REQUEST_YIELD` / `ACK_YIELD` / `RESUME`
+
+**判定**: FAIL
+
+### Nav2 / Gazebo error summary
+
+| 组件 | 证据 | 影响 |
+|------|------|------|
+| `controller_server` | `Resulting plan has 0 poses in it` | `FollowPath` 收到空 path，goal 最终失败 |
+| `bt_navigator` | `Goal failed` | 两台机器人都未完成 Nav2 goal |
+| `global_costmap` | 启动早期仍有 `Timed out waiting for transform ... map` / extrapolation | map TF 建链存在启动抖动 |
+| `planner_server` | 后段有 `Robot is out of bounds of the costmap` | 与 odom / map pose 漂移或多源 odom 冲突相关，需单独处理 |
+| `/speed_limit` | 无 SpeedLimit 消息 | `AdjustSpeedForFleet` tick 了，但未形成可观测 speed limit 发布 |
+
+### final verdict
+
+**FAIL**
+
+理由：
+
+1. planner blocker 已明显前移：corridor map + reachable goals 下 `ComputePathToPose` 全部 PASS。
+2. 机器人已出现短时实际位移，但两个 Nav2 goal 最终仍 `TaskResult.FAILED`。
+3. `FollowPath` 仍收到 zero-length plan，说明 BT blackboard / FollowPath path 输入链路仍有问题。
+4. `/speed_limit`、yield request / ack / resume 仍没有日志证据。
+
+### remaining risks
+
+1. `ComputePathToPose` probe 成功，但 BT runtime 中 `FollowPath` 仍收到 0 poses，需继续定位 Nav2 BT blackboard path 传递与自定义 decorator 交互。
+2. `mock_path.log` 中机器人位置有短时位移，但后续仍可能受 Gazebo diff_drive odom 与 `cmd_vel_to_odom.py` 双源 odom 影响。
+3. `AdjustSpeedForFleet` 已 tick，但未发布 `/speed_limit`，需要确认其订阅的 `fleet/coordinator_status` 是否解析到了状态，或是否只在 speed ratio 变化时发布导致首帧缺失。
+4. 本轮没有 yield/resume 闭环，不满足 M3 PASS。
+
+### next recommendation
+
+1. 新增一个最小 BT runtime 对照：使用同一 `ComputePathToPose -> FollowPath` 默认 Nav2 XML 验证 `FollowPath` 是否能收到非空 path。
+2. 如果默认 XML 可移动，则继续缩小 `navigate_with_fleet.xml`：先保留 `FollowPath` 原样，再逐步加入 `CheckFleetConflict`、`WaitForYieldClear`、`AdjustSpeedForFleet`。
+3. 修复 `/speed_limit` 证据链：让 `AdjustSpeedForFleet` 首次 tick 发布当前 speed limit，并确认订阅到 `/robot_*/fleet/coordinator_status`。

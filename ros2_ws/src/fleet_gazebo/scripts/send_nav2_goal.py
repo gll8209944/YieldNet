@@ -15,11 +15,13 @@ from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 
 
 class AmclPoseWaiter(Node):
     def __init__(self, namespace: str, topic: str):
         super().__init__(f'amcl_pose_waiter_{namespace}')
+        self.set_parameters([Parameter('use_sim_time', value=True)])
         self.received = False
         self.topic = topic
         self.initial_pose_topic = f'/{namespace}/initialpose'
@@ -70,6 +72,7 @@ def main() -> None:
 
     rclpy.init()
     nav = BasicNavigator(namespace=args.namespace)
+    nav.set_parameters([Parameter('use_sim_time', value=True)])
     amcl_topic = f'/{args.namespace}/amcl_pose'
     waiter = AmclPoseWaiter(args.namespace, amcl_topic)
 
@@ -121,9 +124,10 @@ def main() -> None:
         time.sleep(0.05)
         if time.time() - start > 120.0:
             print('Timeout waiting for navigation', file=sys.stderr)
-            nav.cancelNav()
+            nav.cancelTask()
             sys.exit(3)
 
+    nav.get_logger().info(f'NavigateToPose result: {nav.getResult()}')
     rclpy.shutdown()
 
 

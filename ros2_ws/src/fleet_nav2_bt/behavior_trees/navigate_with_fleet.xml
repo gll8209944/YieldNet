@@ -1,8 +1,12 @@
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <PipelineSequence>
-      <!-- Compute path to goal -->
-      <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+      <!-- Compute path to goal while ticking fleet speed adjustment. -->
+      <AdjustSpeedForFleet default_speed="0.5">
+        <GoalUpdatedController>
+          <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+        </GoalUpdatedController>
+      </AdjustSpeedForFleet>
 
       <!-- Fleet coordination wrapper -->
       <ReactiveSequence name="FleetCoordinatedFollow">
@@ -19,11 +23,8 @@
           </Sequence>
         </ReactiveFallback>
 
-        <!-- Adjust speed based on fleet state -->
-        <AdjustSpeedForFleet default_speed="0.5">
-          <!-- Follow the computed path with speed adjustment -->
-          <FollowPath path="{path}" controller_id="FollowPath"/>
-        </AdjustSpeedForFleet>
+        <!-- Follow the computed path. Speed limits are published by the wrapper above. -->
+        <FollowPath path="{path}" controller_id="FollowPath"/>
       </ReactiveSequence>
     </PipelineSequence>
   </BehaviorTree>

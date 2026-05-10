@@ -29,6 +29,13 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_DIR=/tmp/fleet_test_nav2_e2e_yield_${TIMESTAMP}
 WITH_NAV2=${WITH_NAV2:-1}
 WITH_GOALS=${WITH_GOALS:-1}
+WITH_PATH_PROBES=${WITH_PATH_PROBES:-1}
+ROBOT_A_GOAL_X=${ROBOT_A_GOAL_X:--1.0}
+ROBOT_A_GOAL_Y=${ROBOT_A_GOAL_Y:-0.0}
+ROBOT_A_GOAL_YAW=${ROBOT_A_GOAL_YAW:-0.0}
+ROBOT_B_GOAL_X=${ROBOT_B_GOAL_X:-1.0}
+ROBOT_B_GOAL_Y=${ROBOT_B_GOAL_Y:-0.0}
+ROBOT_B_GOAL_YAW=${ROBOT_B_GOAL_YAW:-3.14159}
 
 mkdir -p "$LOG_DIR"
 
@@ -74,11 +81,24 @@ if [ ! -f "${PKG_SHARE}/scripts/move_robots_corridor_two.py" ]; then
 fi
 MOVE_PY="${PKG_SHARE}/scripts/move_robots_corridor_two.py"
 SEND_GOAL_PY="${PKG_SHARE}/scripts/send_nav2_goal.py"
+COLLECTOR_PY="${PKG_SHARE}/scripts/collect_nav2_e2e_topics.py"
+COMPUTE_PATH_PROBE_PY="${PKG_SHARE}/scripts/compute_path_probe.py"
+WRITE_CORRIDOR_MAP_PY="${PKG_SHARE}/scripts/write_corridor_map.py"
 C2O_PY="${ROS2_WS}/src/fleet_coordination/fleet_coordination/cmd_vel_to_odom.py"
+for helper in COLLECTOR_PY COMPUTE_PATH_PROBE_PY WRITE_CORRIDOR_MAP_PY; do
+  helper_path="${!helper}"
+  if [ ! -f "$helper_path" ]; then
+    helper_name="$(basename "$helper_path")"
+    helper_src="${SCRIPT_DIR}/${helper_name}"
+    if [ -f "$helper_src" ]; then
+      printf -v "$helper" '%s' "$helper_src"
+    fi
+  fi
+done
 
 cleanup_screens() {
   screen -ls 2>/dev/null | awk '
-    match($1, /\.(gaz|mover|mock_path|nav2_ra|nav2_rb|goal_a|goal_b|rsp_robot_a|rsp_robot_b|coord_robot_a|coord_robot_b|c2o_robot_a|c2o_robot_b|eco_yield|eco_status_robot_a|eco_status_robot_b|eco_sl_robot_a|eco_sl_robot_b)$/) {
+    match($1, /\.(gaz|mover|mock_path|nav2_ra|nav2_rb|goal_a|goal_b|rsp_robot_a|rsp_robot_b|coord_robot_a|coord_robot_b|c2o_robot_a|c2o_robot_b|e2e_collector|eco_yield|eco_status_robot_a|eco_status_robot_b|eco_sl_robot_a|eco_sl_robot_b)$/) {
       print $1
     }' | while read -r session; do
       [ -n "$session" ] || continue
@@ -108,11 +128,16 @@ cleanup
 sleep 2
 
 echo "LOG_DIR=$LOG_DIR"
-echo "WITH_NAV2=$WITH_NAV2 WITH_GOALS=$WITH_GOALS DURATION=$DURATION"
+echo "WITH_NAV2=$WITH_NAV2 WITH_GOALS=$WITH_GOALS WITH_PATH_PROBES=$WITH_PATH_PROBES DURATION=$DURATION"
+echo "GOALS robot_a=(${ROBOT_A_GOAL_X}, ${ROBOT_A_GOAL_Y}, ${ROBOT_A_GOAL_YAW}) robot_b=(${ROBOT_B_GOAL_X}, ${ROBOT_B_GOAL_Y}, ${ROBOT_B_GOAL_YAW})"
 
 echo "[1] Merge Nav2 params with fleet BT plugins"
 fleet_merge_nav2_fleet_params "${LOG_DIR}/nav2_robot_a.yaml" robot_a
 fleet_merge_nav2_fleet_params "${LOG_DIR}/nav2_robot_b.yaml" robot_b
+
+echo "[1b] Generate corridor occupancy map aligned with corridor.world"
+python3 "${WRITE_CORRIDOR_MAP_PY}" "${LOG_DIR}"
+MAP_YAML="${LOG_DIR}/corridor_map.yaml"
 
 prepare_robot_sdf() {
   local robot=$1
@@ -234,7 +259,7 @@ if [ "$WITH_NAV2" = "1" ]; then
     export ROS_DOMAIN_ID=0
     ros2 launch nav2_bringup bringup_launch.py \
       slam:=False use_sim_time:=True \
-      map:=/opt/ros/humble/share/nav2_bringup/maps/turtlebot3_world.yaml \
+      map:=${MAP_YAML} \
       namespace:=robot_a use_namespace:=True \
       params_file:=${LOG_DIR}/nav2_robot_a.yaml \
       autostart:=true use_composition:=False \
@@ -247,7 +272,7 @@ if [ "$WITH_NAV2" = "1" ]; then
     export ROS_DOMAIN_ID=0
     ros2 launch nav2_bringup bringup_launch.py \
       slam:=False use_sim_time:=True \
-      map:=/opt/ros/humble/share/nav2_bringup/maps/turtlebot3_world.yaml \
+      map:=${MAP_YAML} \
       namespace:=robot_b use_namespace:=True \
       params_file:=${LOG_DIR}/nav2_robot_b.yaml \
       autostart:=true use_composition:=False \
@@ -256,6 +281,22 @@ if [ "$WITH_NAV2" = "1" ]; then
   sleep 6
 else
   echo "[7] Skipping Nav2 (WITH_NAV2=0)"
+fi
+
+if [ "$WITH_NAV2" = "1" ] && [ "$WITH_PATH_PROBES" = "1" ]; then
+  echo "[7b] ComputePathToPose probes"
+  python3 "${COMPUTE_PATH_PROBE_PY}" robot_a \
+    --start-x -4.0 --start-y 0.0 --start-yaw 0.0 \
+    --goal current:0.0:0.0:0.0 \
+    --goal reachable:${ROBOT_A_GOAL_X}:${ROBOT_A_GOAL_Y}:${ROBOT_A_GOAL_YAW} \
+    --goal corridor_far:1.0:0.0:0.0 \
+    > "${LOG_DIR}/compute_path_robot_a.log" 2>&1 || true
+  python3 "${COMPUTE_PATH_PROBE_PY}" robot_b \
+    --start-x 4.0 --start-y 0.0 --start-yaw 3.14159 \
+    --goal current:0.0:0.0:3.14159 \
+    --goal reachable:${ROBOT_B_GOAL_X}:${ROBOT_B_GOAL_Y}:${ROBOT_B_GOAL_YAW} \
+    --goal corridor_far:-1.0:0.0:3.14159 \
+    > "${LOG_DIR}/compute_path_robot_b.log" 2>&1 || true
 fi
 
 if [ "$WITH_NAV2" = "0" ]; then
@@ -278,8 +319,8 @@ if [ "$WITH_NAV2" = "1" ] && [ "$WITH_GOALS" = "1" ]; then
     source /opt/ros/humble/setup.bash
     source ${ROS2_WS}/install/setup.bash
     export ROS_DOMAIN_ID=0
-    sleep 40
-    python3 ${SEND_GOAL_PY} robot_a 0.0 0.0 0.0 \
+    sleep 5
+    python3 ${SEND_GOAL_PY} robot_a ${ROBOT_A_GOAL_X} ${ROBOT_A_GOAL_Y} ${ROBOT_A_GOAL_YAW} \
       --initial-x -4.0 --initial-y 0.0 --initial-yaw 0.0 \
       2>&1 | tee $LOG_DIR/goal_robot_a.log || true
     exec bash"
@@ -287,30 +328,23 @@ if [ "$WITH_NAV2" = "1" ] && [ "$WITH_GOALS" = "1" ]; then
     source /opt/ros/humble/setup.bash
     source ${ROS2_WS}/install/setup.bash
     export ROS_DOMAIN_ID=0
-    sleep 42
-    python3 ${SEND_GOAL_PY} robot_b 0.0 0.0 3.14159 \
+    sleep 7
+    python3 ${SEND_GOAL_PY} robot_b ${ROBOT_B_GOAL_X} ${ROBOT_B_GOAL_Y} ${ROBOT_B_GOAL_YAW} \
       --initial-x 4.0 --initial-y 0.0 --initial-yaw 3.14159 \
       2>&1 | tee $LOG_DIR/goal_robot_b.log || true
     exec bash"
 fi
 
 echo "[10] Topic collectors (${DURATION}s)"
-for r in robot_a robot_b; do
-  screen -dmS eco_status_${r} bash -c "
+COLLECTOR_DURATION=$DURATION
+if [ "$DURATION" -gt 5 ]; then
+  COLLECTOR_DURATION=$((DURATION - 3))
+fi
+screen -dmS e2e_collector bash -c "
     source /opt/ros/humble/setup.bash
     source ${ROS2_WS}/install/setup.bash
-    timeout ${DURATION}s ros2 topic echo /${r}/fleet/coordinator_status std_msgs/msg/String >> $LOG_DIR/status_${r}.log 2>&1 || true
-    exec bash" &
-  screen -dmS eco_sl_${r} bash -c "
-    source /opt/ros/humble/setup.bash
-    source ${ROS2_WS}/install/setup.bash
-    timeout ${DURATION}s ros2 topic echo /${r}/speed_limit nav2_msgs/msg/SpeedLimit >> $LOG_DIR/speed_${r}.log 2>&1 || true
-    exec bash" &
-done
-screen -dmS eco_yield bash -c "
-    source /opt/ros/humble/setup.bash
-    source ${ROS2_WS}/install/setup.bash
-    timeout ${DURATION}s ros2 topic echo /fleet/yield fleet_msgs/msg/YieldCommand >> $LOG_DIR/yield.log 2>&1 || true
+    export PYTHONPATH=${ROS2_WS}/install/fleet_msgs/local/lib/python3.10/dist-packages:${ROS2_WS}/install/fleet_msgs/lib/python3.10/site-packages:\$PYTHONPATH
+    python3 ${COLLECTOR_PY} --duration ${COLLECTOR_DURATION} --output-dir $LOG_DIR 2>&1 | tee $LOG_DIR/collector.log || true
     exec bash" &
 
 sleep "$DURATION"
