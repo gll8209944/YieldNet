@@ -11,6 +11,7 @@ publish odometry with namespaced robot models.
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import TransformStamped
@@ -22,12 +23,15 @@ def _quaternion_from_yaw(yaw: float):
     """Compute quaternion (x,y,z,w) from yaw angle. Pure math, no tf_transformations."""
     sy = math.sin(yaw * 0.5)
     cy = math.cos(yaw * 0.5)
-    return (sy, 0.0, 0.0, cy)  # (qx, qy, qz, qw)
+    return (0.0, 0.0, sy, cy)  # (qx, qy, qz, qw)
 
 
 class CmdVelToOdom(Node):
     def __init__(self, robot_id: str):
         super().__init__(f'cmd_vel_to_odom_{robot_id}')
+        # This Gazebo smoke workaround must follow simulation time so TF/odom
+        # timestamps line up with Nav2, AMCL and LaserScan messages.
+        self.set_parameters([Parameter('use_sim_time', value=True)])
         self.robot_id = robot_id
         self.x = 0.0
         self.y = 0.0

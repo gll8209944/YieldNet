@@ -545,55 +545,235 @@ P0 blockers identified in §7 above have been resolved:
 
 ---
 
-## S3-M3-NAV2-INFRA-ODOM-AMCL-FIX (2026-05-10)
+## Scenario: Nav2 e2e infra odom and AMCL fix
 
-**问题**: Nav2 e2e 测试中 cmd_vel_to_odom 无法为 Nav2 提供可用 TF，导致 local_costmap 报错 "frame odom does not exist"，且目标被 bt_navigator 拒绝。
+### root cause
 
-### 根因
+本轮排查确认了 4 个真实基础设施问题：
 
-1. **Timer 不触发**: `rclpy.spin(node)` 不会处理 timer callback，只处理 subscription callback。TF 仅在 cmd_vel 收到时触发一次，无法满足 Nav2 控制器激活前的 TF 可用性要求。
+1. **Nav2 参数未按机器人 namespace 改写**
+   - 旧 YAML 仍使用未命名空间的 `odom` / `base_link` / `/odom`
+   - 已改为按机器人生成 `nav2_robot_a.yaml` / `nav2_robot_b.yaml`
+2. **`robot_state_publisher` 未真正前缀 frame**
+   - 原脚本写入的是 `robot_namespace`
+   - RSP 日志只显示 `base_link` / `base_scan`
+   - 已改为 `frame_prefix: robot_a/` / `robot_b/`
+3. **`send_nav2_goal.py` 缺少 `amcl_pose` namespace 显式检查**
+   - 已改为等待 `/{namespace}/amcl_pose`
+   - 保留超时与清晰错误输出
+4. **`cmd_vel_to_odom.py` 与 Nav2 仍存在 TF 时钟/可见性问题**
+   - 已补 `SingleThreadedExecutor`
+   - 已补 `tf2_ros.TransformBroadcaster`
+   - 已补 `use_sim_time=true`
+   - 已修正 yaw quaternion 轴向
 
-2. **tf2 frame 隔离**: `cmd_vel_to_odom` 原本通过 `create_publisher(TransformStamped, f'{ns}/tf_footprint', 10)` 发布到 `{ns}/tf_footprint` topic（机器人 namespace topic），而 `robot_state_publisher` 发布 URDF chain 到 `/robot_a/tf`。tf2 查找器无法跨 topic 合并 frame tree，导致 `odom → base_footprint` 对 `local_costmap` 不可见。
+但在最新一轮 `WITH_NAV2=1` e2e 里，Nav2 仍持续报：
 
-3. **frame ID 不匹配**: 即使 TF 发到 `/tf`，frame ID 为 `robot_a/odom`（namespaced），而 `local_costmap` 的 `global_frame: odom`（un-namespaced）。tf2 查找器无法关联不同命名空间的 frame。
+- `Invalid frame ID "robot_a/odom" passed to canTransform argument target_frame - frame does not exist`
+- `Invalid frame ID "robot_b/odom" passed to canTransform argument target_frame - frame does not exist`
 
-### 修复
+同时 AMCL 仍持续报：
 
-| 文件 | 修改 |
-|------|------|
-| `cmd_vel_to_odom.py` | 1. `rclpy.spin()` → `SingleThreadedExecutor().add_node(node).spin()`（timer callback 必须）<br>2. `create_publisher(TransformStamped, ...)` → `tf2_ros.TransformBroadcaster(self).sendTransform()`（发布到 /tf）<br>3. TF 10Hz 定时发布，不依赖 cmd_vel 回调<br>4. frame ID 保持 namespaced（`robot_a/odom → robot_a/base_footprint`），匹配 robot_state_publisher URDF chain |
+- `Message Filter dropping message: frame 'robot_a/base_scan' ... earlier than all the data in the transform cache`
+- `Message Filter dropping message: frame 'robot_b/base_scan' ... earlier than all the data in the transform cache`
 
-**注意**: `cmd_vel_to_odom.py` 不是 colcon entry_point，运行路径 `${ROS2_WS}/src/fleet_coordination/fleet_coordination/cmd_vel_to_odom.py`（symlink-install 下 Python 文件不在 `lib/`）。
+因此，本轮结论不能写 PASS，也不能写 Nav2 e2e PARTIAL PASS，只能写 **FAIL**。
 
-### 测试结果 TS=20260510_100705（90s，WITH_NAV2=1 WITH_GOALS=1）
+### modified files
 
-| 指标 | 结果 | 证据 |
-|------|------|------|
-| Robot 移动 | **PASS** ✅ | `own_pos=(-3.56, 0.00)` → `(0.13, 0.00)` |
-| Goal 拒绝数 | **PASS** ✅ | `grep -c 'Goal.*reject' = 0` |
-| Fleet 协调 | **PASS** ✅ | `STATE_CHANGE` CAUTION↔EMERGENCY 持续转换 |
-| local_costmap TF 错误 | **112 次** ⚠️ | `global_frame: odom` 参数未 namespace，仍影响 costmap |
-| Collision | **0** ✅ | odom 无碰撞记录 |
-| Deadlock | **0** ✅ | robot 持续移动 |
-| Unrecovered EMERGENCY | **0** ✅ | 无持续 emergency |
+- `ros2_ws/src/fleet_gazebo/fleet_gazebo/merge_nav2_fleet_params.py`
+- `ros2_ws/src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh`
+- `ros2_ws/src/fleet_gazebo/scripts/send_nav2_goal.py`
+- `ros2_ws/src/fleet_gazebo/scripts/write_rsp_params.py`
+- `ros2_ws/src/fleet_coordination/fleet_coordination/cmd_vel_to_odom.py`
 
-### 剩余风险
+### WITH_NAV2=0 result
 
-| 风险 | 原因 | 状态 |
-|------|------|------|
-| `local_costmap` TF 错误 112 次 | `merge_nav2_fleet_params.py` 未将 `local_costmap.local_costmap.ros__parameters.global_frame` 从 `odom` 覆盖为 `robot_a/odom` | 降级（robot 仍移动） |
-| `bt_navigator.global_frame: map` 未 namespace | 同上 | 降级 |
-| `amcl.base_frame_id: base_footprint` 未 namespace | 同上 | 降级 |
+**Run command**:
 
-**根因**: `merge_nav2_fleet_params.py` 生成单一 YAML 被两个 robot 共用，但 frame ID 参数值需要 robot-specific。当前脚本不生成 per-robot params。修复需：
-1. 将 `local_costmap.ros__parameters.global_frame` → `robot_a/odom` / `robot_b/odom`
-2. 将 `robot_base_frame` → `robot_a/base_link` / `robot_b/base_link`
-3. 将 `amcl.ros__parameters.base_frame_id` → `robot_a/base_footprint` / `robot_b/base_footprint`
+```bash
+cd /home/guolinlin/ros2_ws/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+WITH_NAV2=0 bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 60
+```
 
-建议方案：生成 per-robot nav2 params 文件（类似 `write_rsp_params.py` 模式），或通过 launch `override_nav2_params` 机制注入。
+**LOG_DIR**: `/tmp/fleet_test_nav2_e2e_yield_20260510_104556`
 
-### 下一步
+**Result**:
 
-1. 修复 `merge_nav2_fleet_params.py`：生成 per-robot YAML 或添加 namespace 前缀覆盖
-2. 重新测试验证 local_costmap TF 错误消除
-3. 验证 AMCL pose `/robot_a/amcl_pose` 被 fleet_coordinator 正确订阅
+- Gazebo spawn 成功
+- 双 `fleet_coordinator` 正常运行
+- `mock_path_publisher` 在初始数次 `No odom data` 后能收到 odom 并持续发 path
+- `coord_robot_a.log` / `coord_robot_b.log` 中出现：
+  - `NORMAL -> CAUTION`
+  - `CAUTION -> YIELDING`
+  - `PASSING`
+  - `REQUEST_YIELD`
+  - `RESUME`
+
+**判定**: fleet coordination 单独链路 **PASS**，说明基础状态机验证不依赖 Nav2。
+
+### build / test result
+
+**Build**:
+
+```bash
+cd /home/guolinlin/ros2_ws/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+```
+
+结果：**PASS**，4 packages finished。
+
+**Test**:
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+colcon test
+colcon test-result --verbose
+```
+
+结果：**PASS**，`32 tests, 0 errors, 0 failures, 0 skipped`。
+
+### run command
+
+```bash
+cd /home/guolinlin/ros2_ws/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+bash src/fleet_gazebo/scripts/run_m3_nav2_e2e_yield.sh 90
+```
+
+### LOG_DIR
+
+- 首轮修复后重跑：`/tmp/fleet_test_nav2_e2e_yield_20260510_105622`
+- 最新重跑（含 `cmd_vel_to_odom use_sim_time` 修复）：`/tmp/fleet_test_nav2_e2e_yield_20260510_105928`
+
+以下判定以最新一轮 `20260510_105928` 为准。
+
+### odom TF evidence
+
+**正向证据**:
+
+- `cmd_vel_to_odom_robot_a.log`:
+  - `TF robot_a/odom->base_footprint count=50/100/150...`
+- `cmd_vel_to_odom_robot_b.log`:
+  - `TF robot_b/odom->base_footprint count=50/100/150...`
+
+**反向证据**:
+
+- `nav2_robot_a.log`:
+  - `Timed out waiting for transform from robot_a/base_link to robot_a/odom ... frame does not exist`
+- `nav2_robot_b.log`:
+  - `Timed out waiting for transform from robot_b/base_link to robot_b/odom ... frame does not exist`
+
+**判定**: workaround 节点已运行、已尝试发 TF，但 **Nav2 仍无法消费 odom TF**，本项 **FAIL**。
+
+### AMCL pose evidence
+
+- `send_nav2_goal.py` 已显式等待 `/{namespace}/amcl_pose`
+- 但 `goal_robot_a.log` / `goal_robot_b.log` 在最新运行中仍为空，没有 “Received AMCL pose ...” 成功证据
+- `nav2_robot_a.log` / `nav2_robot_b.log` 持续出现：
+  - `Message Filter dropping message: frame 'robot_a/base_scan' ... earlier than all the data in the transform cache`
+  - `Message Filter dropping message: frame 'robot_b/base_scan' ... earlier than all the data in the transform cache`
+
+**判定**: `amcl_pose` namespace 代码已补，但 **AMCL pose 仍无成功证据**，本项 **FAIL**。
+
+### robot movement evidence
+
+- `WITH_NAV2=0` baseline 下可见 mover/fleet-only 运动与状态机闭环
+- 最新 `WITH_NAV2=1` 运行中，`coord_robot_a.log` / `coord_robot_b.log` 的 `own_pos` 仍主要在 `0.00`、`-4.00`、`4.00` 间跳变
+- `goal_robot_a.log` / `goal_robot_b.log` 没有有效目标执行日志
+
+**判定**: **FAIL**，机器人未形成可确认的 Nav2 实际移动证据。
+
+### `/speed_limit` evidence
+
+- `speed_robot_a.log` / `speed_robot_b.log` 仍只有 `xmlrpc.client.Fault: !rclpy.ok()`
+- 未找到 `nav2_msgs/msg/SpeedLimit`、`percentage`、`published speed_limit` 证据
+
+**判定**: **FAIL**
+
+### state transition evidence
+
+**WITH_NAV2=0 baseline**:
+
+- `CAUTION`
+- `YIELDING`
+- `PASSING`
+- `REQUEST_YIELD`
+- `RESUME`
+
+**WITH_NAV2=1 latest rerun**:
+
+- coordinator 仍有 `CAUTION` / `EMERGENCY` 抖动
+- 但缺少基于 Nav2 实际移动的稳定状态机闭环
+
+**判定**:
+
+- fleet-only baseline：**PASS**
+- Nav2 e2e：**FAIL / 未闭环**
+
+### yield / resume evidence
+
+- `WITH_NAV2=0` 基线中可观测到完整的让行相关证据
+- 最新 Nav2 模式下没有新的 `yield.log` 有效闭环证据
+
+**判定**:
+
+- `WITH_NAV2=0` baseline：**PASS**
+- `WITH_NAV2=1` Nav2 e2e：**FAIL**
+
+### Nav2 / Gazebo error summary
+
+| Component | Error / Symptom | Impact |
+|-----------|------------------|--------|
+| `controller_server` | `robot_a/odom` / `robot_b/odom` frame does not exist | Nav2 controller 无法工作 |
+| `amcl` | `base_scan ... earlier than all the data in the transform cache` | AMCL pose 无法稳定产出 |
+| `send_nav2_goal.py` | 最新运行无成功输出 | goals 未形成可验证闭环 |
+| topic collectors | `ros2 topic echo` 结束时 `!rclpy.ok()` | collector 结果不可作为成功证据 |
+| Gazebo spawn / bringup | 启动正常 | 非主 blocker |
+
+### PASS / PARTIAL PASS / FAIL 对照表
+
+| 检查项 | PASS 条件 | 实际证据 | 当前判定 | 备注 |
+|--------|-----------|----------|----------|------|
+| WITH_NAV2=0 coordination baseline | coordinator 正常运行并有状态机证据 | `CAUTION` / `YIELDING` / `PASSING` / `REQUEST_YIELD` / `RESUME` | PASS | fleet-only 可用 |
+| odom TF | Nav2 可消费 `map -> odom -> base_link` | workaround 在发 TF，但 Nav2 仍报 `robot_*/odom` 不存在 | FAIL | 主 blocker |
+| AMCL pose namespace | 收到 `/{ns}/amcl_pose` 成功证据 | goal 日志为空，AMCL 仍丢 scan | FAIL | 主 blocker |
+| Nav2 stack start | bringup 完整启动 | bringup 可走到 controller activation | PARTIAL PASS | 仍卡 TF |
+| goals fired | goal sender 成功发目标 | 无成功输出 | FAIL | 无法确认 |
+| robot movement | 机器人产生实际 Nav2 运动 | 仅见位置跳变，无稳定轨迹推进 | FAIL | 无闭环 |
+| topic collectors | collector 拿到有效 topic 数据 | 仅见 `!rclpy.ok()` Traceback | FAIL | collector 自身不稳定 |
+| `/speed_limit` messages | 存在 SpeedLimit 数据 | 无数据 | FAIL | Nav2 未真正跑通 |
+| speed limit dynamic values | 50/0/100% 可见 | 无数据 | FAIL | - |
+| state transition | Nav2 e2e 中有稳定状态转移 | 仅 fleet-only baseline 有效 | FAIL | Nav2 模式未闭环 |
+| yield / resume | Nav2 e2e 中有 request/ack/resume | baseline 有，Nav2 模式无新证据 | FAIL | 不能算 Nav2 PASS |
+| collision | 0 collision 有证据 | 无碰撞计数器 | FAIL | 无法宣称 0 |
+| deadlock | 0 deadlock 有证据 | 无完整证据 | FAIL | 无法宣称 0 |
+| emergency | 0 unrecovered emergency | 仅见状态抖动，无完整恢复证明 | FAIL | 无法宣称 0 |
+
+### final verdict
+
+**FAIL**
+
+因为最新一轮运行中仍同时满足：
+
+- `odom TF` 在 Nav2 侧不可用
+- `amcl_pose` 无成功证据
+- 机器人没有可确认的 Nav2 实际移动
+- `/speed_limit` 无数据
+
+### remaining risks
+
+1. `cmd_vel_to_odom.py` 的 TF 确实在发，但 `tf2`/Nav2 侧仍未接受，说明仍存在更底层的 TF topic / QoS / clock / bridge 问题。
+2. `ros2 topic echo` collector 在场景结束时持续出现 `!rclpy.ok()`，影响 `/speed_limit` 与 `yield` 采集可信度。
+3. ECS 上无 `ros-humble-xacro`，当前使用静态 URDF，虽可跑 smoke，但会放大 TF/传感器对齐排查复杂度。
+
+### next recommendation
+
+1. 在场景运行中增加 **live TF audit**，直接验证 `/tf` 中是否真的存在 `robot_a/odom -> robot_a/base_footprint` 与 `robot_a/base_footprint -> robot_a/base_link`。
+2. 单独验证 `cmd_vel_to_odom.py` 发往哪个 TF topic，以及 Nav2 是否真的在消费同一条 `/tf`。
+3. 将 collector 从 `ros2 topic echo` 改为受控 Python subscriber，避免 `!rclpy.ok()` 污染判定。

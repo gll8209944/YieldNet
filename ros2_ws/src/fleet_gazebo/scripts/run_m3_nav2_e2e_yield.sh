@@ -98,7 +98,8 @@ echo "LOG_DIR=$LOG_DIR"
 echo "WITH_NAV2=$WITH_NAV2 WITH_GOALS=$WITH_GOALS DURATION=$DURATION"
 
 echo "[1] Merge Nav2 params with fleet BT plugins"
-fleet_merge_nav2_fleet_params "${LOG_DIR}/nav2_fleet_merged.yaml"
+fleet_merge_nav2_fleet_params "${LOG_DIR}/nav2_robot_a.yaml" robot_a
+fleet_merge_nav2_fleet_params "${LOG_DIR}/nav2_robot_b.yaml" robot_b
 
 prepare_robot_sdf() {
   local robot=$1
@@ -208,7 +209,7 @@ if [ "$WITH_NAV2" = "1" ]; then
   done
   sleep 1
 
-  echo "[7] Nav2 bringup (AMCL) x2 — params $LOG_DIR/nav2_fleet_merged.yaml"
+  echo "[7] Nav2 bringup (AMCL) x2 — params ${LOG_DIR}/nav2_robot_{a,b}.yaml"
   screen -dmS nav2_ra bash -c "
     source /opt/ros/humble/setup.bash
     source ${ROS2_WS}/install/setup.bash
@@ -217,7 +218,7 @@ if [ "$WITH_NAV2" = "1" ]; then
       slam:=False use_sim_time:=True \
       map:=/opt/ros/humble/share/nav2_bringup/maps/turtlebot3_world.yaml \
       namespace:=robot_a use_namespace:=True \
-      params_file:=${LOG_DIR}/nav2_fleet_merged.yaml \
+      params_file:=${LOG_DIR}/nav2_robot_a.yaml \
       autostart:=true use_composition:=False \
       2>&1 | tee $LOG_DIR/nav2_robot_a.log
     exec bash"
@@ -230,7 +231,7 @@ if [ "$WITH_NAV2" = "1" ]; then
       slam:=False use_sim_time:=True \
       map:=/opt/ros/humble/share/nav2_bringup/maps/turtlebot3_world.yaml \
       namespace:=robot_b use_namespace:=True \
-      params_file:=${LOG_DIR}/nav2_fleet_merged.yaml \
+      params_file:=${LOG_DIR}/nav2_robot_b.yaml \
       autostart:=true use_composition:=False \
       2>&1 | tee $LOG_DIR/nav2_robot_b.log
     exec bash"

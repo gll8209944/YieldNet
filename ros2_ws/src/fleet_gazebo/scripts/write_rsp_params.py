@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write robot_state_publisher params YAML with robot_description and robot_namespace.
+"""Write robot_state_publisher params YAML with robot_description and frame_prefix.
 
 This avoids the inline -p robot_description:=$(cat ...) approach which causes
 UnknownROSArgsError due to \\r characters in the URDF corrupting rcl argument parsing.
@@ -23,11 +23,13 @@ def main() -> None:
     # Strip carriage returns that corrupt rcl argument parsing
     urdf = urdf.replace('\r', '')
 
-    # Build YAML with proper newlines and robot_namespace
+    # Build YAML with proper newlines and frame_prefix so TF frames become
+    # robot_a/base_link, robot_a/base_scan, etc. `robot_namespace` alone does
+    # not prefix frame IDs for robot_state_publisher.
     yaml_lines = []
     yaml_lines.append('robot_state_publisher:\n')
     yaml_lines.append('  ros__parameters:\n')
-    yaml_lines.append(f'    robot_namespace: {robot}\n')
+    yaml_lines.append(f'    frame_prefix: {robot}/\n')
     yaml_lines.append('    use_sim_time: true\n')
     yaml_lines.append('    robot_description: |\n')
     for line in urdf.split('\n'):
