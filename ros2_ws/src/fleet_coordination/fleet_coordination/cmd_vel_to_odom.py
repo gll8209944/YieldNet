@@ -14,7 +14,13 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist, TransformStamped
 import math
-import tf_transformations
+
+
+def _quaternion_from_yaw(yaw: float):
+    """Compute quaternion (x,y,z,w) from yaw angle. Pure math, no tf_transformations."""
+    sy = math.sin(yaw * 0.5)
+    cy = math.cos(yaw * 0.5)
+    return (sy, 0.0, 0.0, cy)  # (qx, qy, qz, qw)
 
 
 class CmdVelToOdom(Node):
@@ -76,11 +82,11 @@ class CmdVelToOdom(Node):
         odom.pose.pose.position.y = self.y
         odom.pose.pose.position.z = 0.0
 
-        q = tf_transformations.quaternion_from_euler(0, 0, self.theta)
-        odom.pose.pose.orientation.x = q[0]
-        odom.pose.pose.orientation.y = q[1]
-        odom.pose.pose.orientation.z = q[2]
-        odom.pose.pose.orientation.w = q[3]
+        qx, qy, qz, qw = _quaternion_from_yaw(self.theta)
+        odom.pose.pose.orientation.x = qx
+        odom.pose.pose.orientation.y = qy
+        odom.pose.pose.orientation.z = qz
+        odom.pose.pose.orientation.w = qw
 
         odom.twist.twist.linear.x = vx
         odom.twist.twist.linear.y = vy
@@ -96,10 +102,10 @@ class CmdVelToOdom(Node):
         tf.transform.translation.x = self.x
         tf.transform.translation.y = self.y
         tf.transform.translation.z = 0.0
-        tf.transform.rotation.x = q[0]
-        tf.transform.rotation.y = q[1]
-        tf.transform.rotation.z = q[2]
-        tf.transform.rotation.w = q[3]
+        tf.transform.rotation.x = qx
+        tf.transform.rotation.y = qy
+        tf.transform.rotation.z = qz
+        tf.transform.rotation.w = qw
 
         self.tf_broadcaster.publish(tf)
 
