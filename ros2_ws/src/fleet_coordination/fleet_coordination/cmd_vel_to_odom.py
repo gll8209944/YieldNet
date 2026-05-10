@@ -12,7 +12,9 @@ publish odometry with namespaced robot models.
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Twist, TransformStamped
+from geometry_msgs.msg import Twist
+from geometry_msgs.msg import TransformStamped
+import tf2_ros
 import math
 
 
@@ -46,10 +48,42 @@ class CmdVelToOdom(Node):
         # Publish odometry
         self.odom_pub = self.create_publisher(Odometry, f'{ns}/odom', 10)
 
-        # Publish tf odom -> base_footprint
-        self.tf_broadcaster = self.create_publisher(TransformStamped, f'{ns}/tf_footprint', 10)
+        # Publish tf robot_id/odom -> robot_id/base_footprint to /tf using tf2_ros
+        # TransformBroadcaster. This must match the namespaced frame IDs from
+        # robot_state_publisher (URDF chain: robot_a/odom -> robot_a/base_footprint
+        # -> robot_a/base_link). Without matching namespaced frame IDs, tf2 cannot
+        # find the transform chain and local_costmap reports "frame odom does not exist".
+        self._tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+
+        # Publish TF at 10Hz so Nav2 can find odom frame before any goal is accepted.
+        self._tf_timer = self.create_timer(0.1, self._publish_tf)
+        self._tf_count = 0
 
         self.get_logger().info(f'CmdVelToOdom started for {robot_id}')
+
+    def _publish_tf(self):
+        """Publish robot_id/odom->robot_id/base_footprint TF to /tf at 10Hz."""
+        current_time = self.get_clock().now()
+        qx, qy, qz, qw = _quaternion_from_yaw(self.theta)
+
+        # Use namespaced frame IDs to match robot_state_publisher URDF chain.
+        tf = TransformStamped()
+        tf.header.stamp = current_time.to_msg()
+        tf.header.frame_id = f'{self.robot_id}/odom'
+        tf.child_frame_id = f'{self.robot_id}/base_footprint'
+        tf.transform.translation.x = self.x
+        tf.transform.translation.y = self.y
+        tf.transform.translation.z = 0.0
+        tf.transform.rotation.x = qx
+        tf.transform.rotation.y = qy
+        tf.transform.rotation.z = qz
+        tf.transform.rotation.w = qw
+
+        self._tf_broadcaster.sendTransform(tf)
+
+        self._tf_count += 1
+        if self._tf_count % 50 == 0:
+            self.get_logger().info(f'TF {self.robot_id}/odom->base_footprint count={self._tf_count}')
 
     def cmd_vel_callback(self, msg: Twist):
         current_time = self.get_clock().now()
@@ -94,24 +128,10 @@ class CmdVelToOdom(Node):
 
         self.odom_pub.publish(odom)
 
-        # Publish tf
-        tf = TransformStamped()
-        tf.header.stamp = current_time.to_msg()
-        tf.header.frame_id = f'{self.robot_id}/odom'
-        tf.child_frame_id = f'{self.robot_id}/base_footprint'
-        tf.transform.translation.x = self.x
-        tf.transform.translation.y = self.y
-        tf.transform.translation.z = 0.0
-        tf.transform.rotation.x = qx
-        tf.transform.rotation.y = qy
-        tf.transform.rotation.z = qz
-        tf.transform.rotation.w = qw
-
-        self.tf_broadcaster.publish(tf)
-
 
 def main():
     import sys
+    from rclpy.executors import SingleThreadedExecutor
 
     if len(sys.argv) < 2:
         print("Usage: cmd_vel_to_odom.py <robot_id>")
@@ -120,9 +140,15 @@ def main():
     robot_id = sys.argv[1]
     rclpy.init()
     node = CmdVelToOdom(robot_id)
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

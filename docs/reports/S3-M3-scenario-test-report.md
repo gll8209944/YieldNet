@@ -542,3 +542,58 @@ P0 blockers identified in §7 above have been resolved:
 - `ros2_ws/src/fleet_gazebo/scripts/write_rsp_params.py` (new)
 
 **Status**: P0 blockers resolved. Test pending re-run on ECS to verify full Nav2 e2e yield flow.
+
+---
+
+## S3-M3-NAV2-INFRA-ODOM-AMCL-FIX (2026-05-10)
+
+**问题**: Nav2 e2e 测试中 cmd_vel_to_odom 无法为 Nav2 提供可用 TF，导致 local_costmap 报错 "frame odom does not exist"，且目标被 bt_navigator 拒绝。
+
+### 根因
+
+1. **Timer 不触发**: `rclpy.spin(node)` 不会处理 timer callback，只处理 subscription callback。TF 仅在 cmd_vel 收到时触发一次，无法满足 Nav2 控制器激活前的 TF 可用性要求。
+
+2. **tf2 frame 隔离**: `cmd_vel_to_odom` 原本通过 `create_publisher(TransformStamped, f'{ns}/tf_footprint', 10)` 发布到 `{ns}/tf_footprint` topic（机器人 namespace topic），而 `robot_state_publisher` 发布 URDF chain 到 `/robot_a/tf`。tf2 查找器无法跨 topic 合并 frame tree，导致 `odom → base_footprint` 对 `local_costmap` 不可见。
+
+3. **frame ID 不匹配**: 即使 TF 发到 `/tf`，frame ID 为 `robot_a/odom`（namespaced），而 `local_costmap` 的 `global_frame: odom`（un-namespaced）。tf2 查找器无法关联不同命名空间的 frame。
+
+### 修复
+
+| 文件 | 修改 |
+|------|------|
+| `cmd_vel_to_odom.py` | 1. `rclpy.spin()` → `SingleThreadedExecutor().add_node(node).spin()`（timer callback 必须）<br>2. `create_publisher(TransformStamped, ...)` → `tf2_ros.TransformBroadcaster(self).sendTransform()`（发布到 /tf）<br>3. TF 10Hz 定时发布，不依赖 cmd_vel 回调<br>4. frame ID 保持 namespaced（`robot_a/odom → robot_a/base_footprint`），匹配 robot_state_publisher URDF chain |
+
+**注意**: `cmd_vel_to_odom.py` 不是 colcon entry_point，运行路径 `${ROS2_WS}/src/fleet_coordination/fleet_coordination/cmd_vel_to_odom.py`（symlink-install 下 Python 文件不在 `lib/`）。
+
+### 测试结果 TS=20260510_100705（90s，WITH_NAV2=1 WITH_GOALS=1）
+
+| 指标 | 结果 | 证据 |
+|------|------|------|
+| Robot 移动 | **PASS** ✅ | `own_pos=(-3.56, 0.00)` → `(0.13, 0.00)` |
+| Goal 拒绝数 | **PASS** ✅ | `grep -c 'Goal.*reject' = 0` |
+| Fleet 协调 | **PASS** ✅ | `STATE_CHANGE` CAUTION↔EMERGENCY 持续转换 |
+| local_costmap TF 错误 | **112 次** ⚠️ | `global_frame: odom` 参数未 namespace，仍影响 costmap |
+| Collision | **0** ✅ | odom 无碰撞记录 |
+| Deadlock | **0** ✅ | robot 持续移动 |
+| Unrecovered EMERGENCY | **0** ✅ | 无持续 emergency |
+
+### 剩余风险
+
+| 风险 | 原因 | 状态 |
+|------|------|------|
+| `local_costmap` TF 错误 112 次 | `merge_nav2_fleet_params.py` 未将 `local_costmap.local_costmap.ros__parameters.global_frame` 从 `odom` 覆盖为 `robot_a/odom` | 降级（robot 仍移动） |
+| `bt_navigator.global_frame: map` 未 namespace | 同上 | 降级 |
+| `amcl.base_frame_id: base_footprint` 未 namespace | 同上 | 降级 |
+
+**根因**: `merge_nav2_fleet_params.py` 生成单一 YAML 被两个 robot 共用，但 frame ID 参数值需要 robot-specific。当前脚本不生成 per-robot params。修复需：
+1. 将 `local_costmap.ros__parameters.global_frame` → `robot_a/odom` / `robot_b/odom`
+2. 将 `robot_base_frame` → `robot_a/base_link` / `robot_b/base_link`
+3. 将 `amcl.ros__parameters.base_frame_id` → `robot_a/base_footprint` / `robot_b/base_footprint`
+
+建议方案：生成 per-robot nav2 params 文件（类似 `write_rsp_params.py` 模式），或通过 launch `override_nav2_params` 机制注入。
+
+### 下一步
+
+1. 修复 `merge_nav2_fleet_params.py`：生成 per-robot YAML 或添加 namespace 前缀覆盖
+2. 重新测试验证 local_costmap TF 错误消除
+3. 验证 AMCL pose `/robot_a/amcl_pose` 被 fleet_coordinator 正确订阅
